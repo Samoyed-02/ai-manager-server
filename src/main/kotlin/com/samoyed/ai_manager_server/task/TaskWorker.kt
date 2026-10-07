@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import java.time.OffsetDateTime
 import java.util.UUID
+import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val MAX_ATTEMPTS = 3
 
@@ -24,6 +25,7 @@ class TaskWorker(
     private val tasks: TaskRepository,
     private val documents: DocumentRepository,
     private val client: AnthropicClient,
+    private val context: ContextService,
     @Value("\${claude.model}") private val model: String,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -100,7 +102,7 @@ class TaskWorker(
         val params = MessageCreateParams.builder()
             .model(model)
             .maxTokens(8192)
-            .system(TASK_SYSTEM.trimIndent())
+            .system(TASK_SYSTEM.trimIndent() + "\n\n" + context.forClaude())
             .addUserMessage(prompt)
             .build()
 

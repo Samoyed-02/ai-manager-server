@@ -6,9 +6,10 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.time.OffsetDateTime
 import java.util.UUID
+import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val SYSTEM_PROMPT = """
-너는 사용자의 개인 AI 매니저야. 사용자는 백엔드/서버 개발자 직무로 취업을 준비하고 지원하고 있는 대학생이며 2027년 2월 졸업 예정이야.
+너는 사용자의 개인 AI 매니저야. 아래 사용자 프로필을 참고해서 맞춤형으로 답해.
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
 """
 
@@ -17,6 +18,7 @@ class ChatService(
     private val client: AnthropicClient,
     private val conversations: ConversationRepository,
     private val messages: ChatMessageRepository,
+    private val context: ContextService,
     @Value("\${claude.model}") private val model: String,
 ) {
     fun prepare(conversationId: UUID?, userText: String): Pair<UUID, List<ChatMessage>> {
@@ -36,7 +38,7 @@ class ChatService(
         val params = MessageCreateParams.builder()
             .model(model)
             .maxTokens(4096)
-            .system(SYSTEM_PROMPT.trimIndent())
+            .system(SYSTEM_PROMPT.trimIndent() + "\n\n" + context.forClaude())
             .apply {
                 history.forEach {
                     if (it.role == "user") addUserMessage(it.content) else addAssistantMessage(it.content)
