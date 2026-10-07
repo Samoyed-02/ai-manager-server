@@ -16,3 +16,7 @@ anthropic:
 claude:
   model: claude-sonnet-5-5
 
+server:
+  port: 8080
+
+
