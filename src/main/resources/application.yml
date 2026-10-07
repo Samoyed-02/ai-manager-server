@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: ai-manager-server
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+anthropic:
+  api-key: ${ANTHROPIC_API_KEY}
+
+claude:
+  model: claude-sonnet-5-5
