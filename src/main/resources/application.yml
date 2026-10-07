@@ -6,8 +6,13 @@ spring:
       ddl-auto: validate
     open-in-view: false
 
+app:
+   passcode: ${APP_PASSCODE}
+   allowed-origins: ${ALLOWED_ORIGINS:http://localhost:3000}
+
 anthropic:
   api-key: ${ANTHROPIC_API_KEY}
 
 claude:
   model: claude-sonnet-5-5
+
