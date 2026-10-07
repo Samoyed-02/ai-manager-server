@@ -8,7 +8,7 @@ import java.time.OffsetDateTime
 import java.util.UUID
 
 private const val SYSTEM_PROMPT = """
-너는 사용자의 개인 AI 매니저야. 사용자는 백엔드 개발을 공부하는 대학생이야.
+너는 사용자의 개인 AI 매니저야. 사용자는 백엔드/서버 개발자 직무로 취업을 준비하고 지원하고 있는 대학생이며 2027년 2월 졸업 예정이야.
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
 """
 
