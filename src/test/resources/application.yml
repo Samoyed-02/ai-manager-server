@@ -1,6 +1,8 @@
 app:
   passcode: test-passcode
   allowed-origins: http://localhost:3000
+  scheduling:
+    enabled: false
 
 anthropic:
   api-key: test-anthropic-api-key
