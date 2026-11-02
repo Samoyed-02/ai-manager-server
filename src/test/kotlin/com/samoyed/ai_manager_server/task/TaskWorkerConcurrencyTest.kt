@@ -7,6 +7,7 @@ import com.anthropic.services.blocking.MessageService
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -149,6 +150,31 @@ class TaskWorkerConcurrencyTest {
             { assertDoesNotThrow { controller.get(id) } },
         )
     }
+
+    @Test
+    fun `stale 복구는 시도 횟수를 다 쓴 작업만 FAILED로 끝내고 나머지는 되돌린다`() {
+        val exhausted = tasks.save(Task("document", "시도 다 씀")).id
+        val retryable = tasks.save(Task("document", "재시도 가능")).id
+        jdbc.sql(
+            """
+            update tasks set status = 'RUNNING', started_at = now() - interval '11 minutes',
+                   attempts = case when id = :exhausted then 3 else 1 end
+            """.trimIndent()
+        ).param("exhausted", exhausted).update()
+
+        worker.recoverStale()
+
+        assertAll(
+            { assertEquals("FAILED", status(exhausted)) },
+            { assertTrue(finishedAtSet(exhausted), "FAILED면 finished_at 기록") },
+            { assertEquals("PENDING", status(retryable)) },
+            { assertFalse(finishedAtSet(retryable)) },
+        )
+    }
+
+    private fun finishedAtSet(id: UUID): Boolean =
+        jdbc.sql("select finished_at is not null from tasks where id = :id").param("id", id)
+            .query(Boolean::class.java).single()
 
     private fun countByStatus(status: String): Int =
         jdbc.sql("select count(*) from tasks where status = :s").param("s", status)
