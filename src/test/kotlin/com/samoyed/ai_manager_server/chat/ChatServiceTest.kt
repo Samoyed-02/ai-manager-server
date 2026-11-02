@@ -1,7 +1,10 @@
 package com.samoyed.ai_manager_server.chat
 
 import com.anthropic.client.AnthropicClient
+import com.anthropic.core.http.Headers
 import com.anthropic.core.http.StreamResponse
+import com.anthropic.errors.AnthropicIoException
+import com.anthropic.errors.RateLimitException
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.RawContentBlockDelta
 import com.anthropic.models.messages.RawContentBlockDeltaEvent
@@ -11,6 +14,8 @@ import com.anthropic.models.messages.StopReason
 import com.anthropic.models.messages.TextDelta
 import com.anthropic.services.blocking.MessageService
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
+import com.samoyed.ai_manager_server.claude.API_ERROR_BODY
+import com.samoyed.ai_manager_server.claude.ClaudeErrorKind
 import com.samoyed.ai_manager_server.task.anyArg
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -86,14 +91,14 @@ class ChatServiceTest {
     fun `텍스트 전에 실패하면 새 대화는 통째로 지워진다`() {
         val prepared = chat.prepare(null, "첫 질문")
         `when`(messageService.createStreaming(anyArg(MessageCreateParams::class.java)))
-            .thenThrow(IllegalStateException("Claude 연결 실패"))
+            .thenThrow(AnthropicIoException("connect timed out: api.anthropic.com"))
 
         chat.respond(prepared) { events += it }
 
         assertAll(
             { assertFalse(conversations.existsById(prepared.conversationId)) },
             { assertEquals(0, messages.count()) },
-            { assertEquals(ChatEvent.Error("Claude 연결 실패"), events.last()) },
+            { assertEquals(ChatEvent.Error("NETWORK", ClaudeErrorKind.NETWORK.userMessage), events.last()) },
         )
     }
 
@@ -105,7 +110,7 @@ class ChatServiceTest {
 
         val second = chat.prepare(first.conversationId, "두 번째 질문")
         `when`(messageService.createStreaming(anyArg(MessageCreateParams::class.java)))
-            .thenThrow(IllegalStateException("Claude 연결 실패"))
+            .thenThrow(AnthropicIoException("connect timed out: api.anthropic.com"))
         chat.respond(second) { events += it }
 
         assertAll(
@@ -128,7 +133,7 @@ class ChatServiceTest {
         assertAll(
             { assertEquals("부분 응답", lastAssistant(prepared.conversationId).content) },
             { assertEquals(MessageStatus.INTERRUPTED, lastAssistant(prepared.conversationId).status) },
-            { assertEquals(ChatEvent.Error("스트림 끊김"), events.last()) },
+            { assertEquals(ChatEvent.Error("UNKNOWN", ClaudeErrorKind.UNKNOWN.userMessage), events.last()) },
         )
     }
 
@@ -158,7 +163,23 @@ class ChatServiceTest {
 
         assertAll(
             { assertFalse(conversations.existsById(prepared.conversationId)) },
-            { assertEquals(ChatEvent.Error("요청이 거절됨"), events.last()) },
+            { assertEquals(ChatEvent.Error("REFUSED", "요청이 거절됐어요"), events.last()) },
+        )
+    }
+
+    @Test
+    fun `API 오류는 종류별 문구로 바꿔 보내고 원문은 노출하지 않는다`() {
+        val prepared = chat.prepare(null, "질문")
+        `when`(messageService.createStreaming(anyArg(MessageCreateParams::class.java)))
+            .thenThrow(RateLimitException.builder().headers(Headers.builder().build()).body(API_ERROR_BODY).build())
+
+        chat.respond(prepared) { events += it }
+
+        val error = events.last() as ChatEvent.Error
+        assertAll(
+            { assertEquals("RATE_LIMITED", error.code) },
+            { assertEquals(ClaudeErrorKind.RATE_LIMITED.userMessage, error.message) },
+            { assertFalse(error.message.contains("req_secret") || error.message.contains("internal detail")) },
         )
     }
 

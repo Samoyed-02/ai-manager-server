@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import java.time.OffsetDateTime
 import java.util.UUID
+import com.samoyed.ai_manager_server.claude.classifyClaudeError
 import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val SYSTEM_PROMPT = """
@@ -29,7 +30,12 @@ sealed interface ChatEvent {
     data class Meta(val conversationId: UUID) : ChatEvent
     data class Delta(val text: String) : ChatEvent
     data class Done(val status: MessageStatus) : ChatEvent
-    data class Error(val message: String) : ChatEvent
+    /** code: ClaudeErrorKind 이름 또는 REFUSED / EMPTY_RESPONSE. message는 사용자에게 보여줄 문구 */
+    data class Error(val code: String, val message: String) : ChatEvent {
+        companion object {
+            fun of(e: Throwable) = classifyClaudeError(e).let { Error(it.name, it.userMessage) }
+        }
+    }
 }
 
 @Service
@@ -107,18 +113,22 @@ class ChatService(
 
         if (text.isBlank()) {
             discardUserMessage(prepared)
-            val reason = when {
-                failure != null -> failure.message ?: "unknown"
-                status == MessageStatus.REFUSED -> "요청이 거절됨"
-                else -> "응답이 비어 있음 (stop_reason=$stopReason)"
-            }
-            emit(ChatEvent.Error(reason))
+            emit(
+                when {
+                    failure != null -> ChatEvent.Error.of(failure)
+                    status == MessageStatus.REFUSED -> ChatEvent.Error("REFUSED", "요청이 거절됐어요")
+                    else -> {
+                        log.warn("conversation {} empty reply (stop_reason={})", prepared.conversationId, stopReason)
+                        ChatEvent.Error("EMPTY_RESPONSE", "응답이 비어 있어요. 다시 시도해 주세요")
+                    }
+                }
+            )
             return
         }
 
         saveAssistant(prepared.conversationId, text.toString(), status)
         if (failure != null) {
-            emit(ChatEvent.Error(failure.message ?: "unknown"))
+            emit(ChatEvent.Error.of(failure))
         } else {
             emit(ChatEvent.Done(status))
         }
