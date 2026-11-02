@@ -2,16 +2,11 @@ package com.samoyed.ai_manager_server.chat
 
 import com.anthropic.client.AnthropicClient
 import com.anthropic.core.http.Headers
-import com.anthropic.core.http.StreamResponse
 import com.anthropic.errors.AnthropicIoException
 import com.anthropic.errors.RateLimitException
 import com.anthropic.models.messages.MessageCreateParams
-import com.anthropic.models.messages.RawContentBlockDelta
-import com.anthropic.models.messages.RawContentBlockDeltaEvent
-import com.anthropic.models.messages.RawMessageDeltaEvent
 import com.anthropic.models.messages.RawMessageStreamEvent
 import com.anthropic.models.messages.StopReason
-import com.anthropic.models.messages.TextDelta
 import com.anthropic.services.blocking.MessageService
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import com.samoyed.ai_manager_server.claude.API_ERROR_BODY
@@ -31,7 +26,6 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.context.bean.override.mockito.MockitoBean
-import java.util.Optional
 import java.util.UUID
 import java.util.stream.Stream
 import kotlin.streams.asStream
@@ -183,34 +177,25 @@ class ChatServiceTest {
         )
     }
 
-    private fun streams(events: Stream<RawMessageStreamEvent>) {
-        @Suppress("UNCHECKED_CAST")
-        val response = mock(StreamResponse::class.java) as StreamResponse<RawMessageStreamEvent>
-        `when`(response.stream()).thenReturn(events)
-        `when`(messageService.createStreaming(anyArg(MessageCreateParams::class.java))).thenReturn(response)
+    @Test
+    fun `히스토리가 40개에서 잘려 assistant로 시작하면 user 메시지부터 시작하게 한다`() {
+        val conversation = conversations.save(Conversation(title = "긴 대화"))
+        // user, assistant를 번갈아 40개 → 새 질문을 더하면 최근 40개는 assistant로 시작한다
+        (0 until 40).forEach { i ->
+            messages.save(ChatMessage(conversation.id, if (i % 2 == 0) "user" else "assistant", "메시지 $i"))
+        }
+
+        val history = chat.prepare(conversation.id, "새 질문").history
+
+        assertAll(
+            { assertEquals("user", history.first().role) },
+            { assertEquals("메시지 2", history.first().content) },
+            { assertEquals(39, history.size) },
+            { assertEquals("새 질문", history.last().content) },
+        )
     }
 
-    private fun textDelta(text: String): RawMessageStreamEvent {
-        val textDelta = mock(TextDelta::class.java)
-        `when`(textDelta.text()).thenReturn(text)
-        val delta = mock(RawContentBlockDelta::class.java)
-        `when`(delta.text()).thenReturn(Optional.of(textDelta))
-        val blockDelta = mock(RawContentBlockDeltaEvent::class.java)
-        `when`(blockDelta.delta()).thenReturn(delta)
-        val event = mock(RawMessageStreamEvent::class.java)
-        `when`(event.contentBlockDelta()).thenReturn(Optional.of(blockDelta))
-        return event
-    }
-
-    private fun stop(reason: StopReason): RawMessageStreamEvent {
-        val delta = mock(RawMessageDeltaEvent.Delta::class.java)
-        `when`(delta.stopReason()).thenReturn(Optional.of(reason))
-        val messageDelta = mock(RawMessageDeltaEvent::class.java)
-        `when`(messageDelta.delta()).thenReturn(delta)
-        val event = mock(RawMessageStreamEvent::class.java)
-        `when`(event.messageDelta()).thenReturn(Optional.of(messageDelta))
-        return event
-    }
+    private fun streams(events: Stream<RawMessageStreamEvent>) = messageService.streams(events)
 
     private fun contents(conversationId: UUID): List<Pair<String, String>> =
         messages.findByConversationIdOrderByIdAsc(conversationId).map { it.role to it.content }

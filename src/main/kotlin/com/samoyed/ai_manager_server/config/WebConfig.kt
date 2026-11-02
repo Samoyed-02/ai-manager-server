@@ -12,12 +12,19 @@ import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 import org.springframework.web.filter.CorsFilter
 import org.springframework.web.filter.OncePerRequestFilter
+import java.security.MessageDigest
 
 @Configuration
 class WebConfig(
     @Value("\${app.allowed-origins}") private val origins: String,
     @Value("\${app.passcode}") private val passcode: String,
 ) {
+    private val expectedPasscode = passcode.toByteArray(Charsets.UTF_8)
+
+    /** 상수 시간 비교. 비교 시간은 입력 길이에만 좌우되어 일치하는 앞부분 길이나 정답 길이가 드러나지 않는다 */
+    private fun passcodeMatches(given: String?): Boolean =
+        given != null && MessageDigest.isEqual(given.toByteArray(Charsets.UTF_8), expectedPasscode)
+
     @Bean
     fun corsFilter(): FilterRegistrationBean<CorsFilter> {
         val config = CorsConfiguration().apply {
@@ -41,7 +48,7 @@ class WebConfig(
                 res: HttpServletResponse,
                 chain: FilterChain,
             ) {
-                if (req.method == "OPTIONS" || req.getHeader("X-App-Passcode") == passcode) {
+                if (req.method == "OPTIONS" || passcodeMatches(req.getHeader("X-App-Passcode"))) {
                     chain.doFilter(req, res)
                 } else {
                     res.status = 401

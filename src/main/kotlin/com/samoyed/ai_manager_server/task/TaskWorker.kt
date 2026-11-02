@@ -136,7 +136,8 @@ class TaskWorker(
         val n = jdbc.sql(
             """
             update tasks
-               set status = case when attempts >= $MAX_ATTEMPTS then 'FAILED' else 'PENDING' end
+               set status = case when attempts >= $MAX_ATTEMPTS then 'FAILED' else 'PENDING' end,
+                   finished_at = case when attempts >= $MAX_ATTEMPTS then now() end
              where status = 'RUNNING'
                and started_at < now() - :staleSeconds * interval '1 second'
             """.trimIndent()
