@@ -8,10 +8,18 @@ import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionTemplate
+import java.time.Duration
 import java.util.UUID
 import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val MAX_ATTEMPTS = 3
+
+/** 이 시간 넘게 RUNNING인 작업은 서버가 죽은 것으로 보고 되살린다 */
+private val STALE_AFTER: Duration = Duration.ofMinutes(10)
+
+/** Task용 Claude 호출 제한. 재시도까지 포함해도 STALE_AFTER 안에 끝나야 한다 */
+private val CLAUDE_TIMEOUT: Duration = Duration.ofMinutes(4)
+private const val CLAUDE_MAX_RETRIES = 1
 
 /** claim 시점의 attempts가 소유권 토큰 역할을 한다 */
 private data class Claim(val id: UUID, val attempts: Int)
@@ -32,6 +40,12 @@ class TaskWorker(
     @Value("\${claude.model}") private val model: String,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    init {
+        require(CLAUDE_TIMEOUT.multipliedBy(CLAUDE_MAX_RETRIES + 1L) < STALE_AFTER) {
+            "Claude 호출 최대 시간($CLAUDE_TIMEOUT × ${CLAUDE_MAX_RETRIES + 1})이 stale 기준($STALE_AFTER)보다 짧아야 한다"
+        }
+    }
 
     @Scheduled(fixedDelay = 2000)
     fun poll() {
@@ -103,9 +117,9 @@ class TaskWorker(
             update tasks
                set status = case when attempts >= $MAX_ATTEMPTS then 'FAILED' else 'PENDING' end
              where status = 'RUNNING'
-               and started_at < now() - interval '10 minutes'
+               and started_at < now() - :staleSeconds * interval '1 second'
             """.trimIndent()
-        ).update()
+        ).param("staleSeconds", STALE_AFTER.seconds).update()
         if (n > 0) log.warn("recovered {} stale tasks", n)
     }
 
@@ -146,7 +160,11 @@ class TaskWorker(
             .addUserMessage(prompt)
             .build()
 
-        val message = client.messages().create(params)
+        // 채팅과 공유하는 클라이언트라 Task 호출에만 타임아웃/재시도 제한을 건다
+        val message = client
+            .withOptions { it.timeout(CLAUDE_TIMEOUT).maxRetries(CLAUDE_MAX_RETRIES) }
+            .messages()
+            .create(params)
         return message.content()
             .mapNotNull { it.text().orElse(null)?.text() }
             .joinToString("")

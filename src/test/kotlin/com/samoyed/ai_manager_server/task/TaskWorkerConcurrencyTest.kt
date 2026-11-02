@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
+import org.mockito.Answers
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
@@ -32,7 +33,8 @@ import kotlin.concurrent.thread
 @Import(TestcontainersConfiguration::class)
 class TaskWorkerConcurrencyTest {
 
-    @MockitoBean
+    /** RETURNS_SELF: withOptions(...)가 mock 자신을 돌려준다 */
+    @MockitoBean(answers = Answers.RETURNS_SELF)
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var tasks: TaskRepository
