@@ -1,6 +1,7 @@
 package com.samoyed.ai_manager_server.profile
 
 import com.samoyed.ai_manager_server.task.DocumentRepository
+import org.springframework.data.domain.Limit
 import org.springframework.stereotype.Service
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RestController
@@ -20,7 +21,7 @@ class ContextService(
     private fun now() = ZonedDateTime.now(zone).format(fmt)
 
     private fun recentDocTitles(n: Int) =
-        documents.findTop50ByOrderByCreatedAtDesc().take(n).map { it.title }
+        documents.findAllByOrderByCreatedAtDesc(Limit.of(n)).map { it.title }
 
     /** Claude용: 전체 프로필 + 최근 문서 10개 */
     fun forClaude(): String = buildString {
