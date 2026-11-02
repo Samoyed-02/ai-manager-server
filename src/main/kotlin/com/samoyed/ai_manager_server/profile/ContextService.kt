@@ -3,8 +3,6 @@ package com.samoyed.ai_manager_server.profile
 import com.samoyed.ai_manager_server.task.DocumentRepository
 import org.springframework.data.domain.Limit
 import org.springframework.stereotype.Service
-import org.springframework.web.bind.annotation.GetMapping
-import org.springframework.web.bind.annotation.RestController
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -54,12 +52,4 @@ class ContextService(
             appendLine("최근 맡긴 문서: ${docs.joinToString(", ")}")
         }
     }
-}
-
-data class ContextDto(val text: String)
-
-@RestController
-class ContextController(private val context: ContextService) {
-    @GetMapping("/context/voice")
-    fun voice() = ContextDto(context.forVoice())
 }
