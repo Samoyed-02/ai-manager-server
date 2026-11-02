@@ -8,7 +8,13 @@ import java.time.OffsetDateTime
 import java.util.UUID
 
 data class ConversationDto(val id: UUID, val title: String?, val updatedAt: OffsetDateTime)
-data class MessageDto(val id: Long, val role: String, val content: String, val createdAt: OffsetDateTime)
+data class MessageDto(
+    val id: Long,
+    val role: String,
+    val content: String,
+    val status: MessageStatus,
+    val createdAt: OffsetDateTime,
+)
 
 @RestController
 @RequestMapping("/conversations")
@@ -24,5 +30,5 @@ class ConversationController(
     @GetMapping("/{id}/messages")
     fun messages(@PathVariable id: UUID): List<MessageDto> =
         messages.findByConversationIdOrderByIdAsc(id)
-            .map { MessageDto(it.id!!, it.role, it.content, it.createdAt) }
+            .map { MessageDto(it.id!!, it.role, it.content, it.status, it.createdAt) }
 }
