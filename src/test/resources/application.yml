@@ -9,3 +9,10 @@ anthropic:
 
 claude:
   model: claude-sonnet-5-5
+
+# 실행된 SQL 문 수를 세는 테스트(TaskControllerTest)용
+spring:
+  jpa:
+    properties:
+      hibernate:
+        generate_statistics: true
