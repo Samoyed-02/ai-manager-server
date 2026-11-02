@@ -1,5 +1,7 @@
 services:
   postgres:
+    # 테스트(TestcontainersConfiguration)·운영 DB와 같은 메이저 버전을 쓴다. 바꿀 때는 세 곳을 함께 맞춘다.
+    # 버전을 낮추면 기존 로컬 데이터(PG 17 형식)를 읽지 못하니 pg_dump로 옮긴 뒤 바꾼다.
     image: 'postgres:17'
     environment:
       - 'POSTGRES_DB=mydatabase'
