@@ -2,6 +2,8 @@ package com.samoyed.ai_manager_server.task
 
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Pattern
+import jakarta.validation.constraints.Size
 import org.springframework.data.domain.Limit
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.*
@@ -9,9 +11,19 @@ import org.springframework.web.server.ResponseStatusException
 import java.time.OffsetDateTime
 import java.util.UUID
 
+const val MAX_TASK_INSTRUCTION = 10_000
+const val MAX_TASK_CONTEXT = 50_000
+
 data class CreateTaskRequest(
-    @field:NotBlank val instruction: String,
+    @field:NotBlank(message = "비어 있을 수 없습니다")
+    @field:Size(max = MAX_TASK_INSTRUCTION, message = "최대 {max}자까지 입력할 수 있습니다")
+    val instruction: String,
+
+    /** 지금 처리할 수 있는 작업 종류는 document뿐이다 */
+    @field:Pattern(regexp = "document", message = "지원하지 않는 작업 종류입니다")
     val type: String = "document",
+
+    @field:Size(max = MAX_TASK_CONTEXT, message = "최대 {max}자까지 입력할 수 있습니다")
     val context: String? = null,
 )
 
