@@ -2,6 +2,7 @@ package com.samoyed.ai_manager_server.chat
 
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Size
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.PostMapping
@@ -10,9 +11,14 @@ import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
 import java.util.UUID
 
+const val MAX_CHAT_MESSAGE = 20_000
+
 data class ChatRequest(
     val conversationId: UUID? = null,
-    @field:NotBlank val message: String,
+
+    @field:NotBlank(message = "비어 있을 수 없습니다")
+    @field:Size(max = MAX_CHAT_MESSAGE, message = "최대 {max}자까지 입력할 수 있습니다")
+    val message: String,
 )
 
 @RestController
