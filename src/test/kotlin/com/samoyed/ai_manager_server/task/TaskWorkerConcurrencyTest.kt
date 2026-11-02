@@ -137,7 +137,7 @@ class TaskWorkerConcurrencyTest {
             jdbc.sql("drop function fail_task_done()").update()
         }
         assertEquals("RUNNING", status(id))
-        assertEquals(1, documentCount(id), "크래시 시점에 이미 저장된 문서 수")
+        assertEquals(0, documentCount(id), "상태 저장이 실패하면 문서도 함께 롤백되어야 함")
 
         jdbc.sql("update tasks set started_at = now() - interval '11 minutes' where id = :id")
             .param("id", id).update()

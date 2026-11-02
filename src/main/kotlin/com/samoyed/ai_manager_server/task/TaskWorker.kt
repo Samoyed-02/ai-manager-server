@@ -7,11 +7,14 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
-import java.time.OffsetDateTime
+import org.springframework.transaction.support.TransactionTemplate
 import java.util.UUID
 import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val MAX_ATTEMPTS = 3
+
+/** claim 시점의 attempts가 소유권 토큰 역할을 한다 */
+private data class Claim(val id: UUID, val attempts: Int)
 
 private const val TASK_SYSTEM = """
 너는 사용자의 개인 AI 매니저가 맡긴 문서 작업을 처리하는 작성자야.
@@ -23,7 +26,7 @@ private const val TASK_SYSTEM = """
 class TaskWorker(
     private val jdbc: JdbcClient,
     private val tasks: TaskRepository,
-    private val documents: DocumentRepository,
+    private val tx: TransactionTemplate,
     private val client: AnthropicClient,
     private val context: ContextService,
     @Value("\${claude.model}") private val model: String,
@@ -32,29 +35,65 @@ class TaskWorker(
 
     @Scheduled(fixedDelay = 2000)
     fun poll() {
-        val id = claimNext() ?: return
-        val task = tasks.findById(id).orElseThrow()
-        log.info("task {} started (attempt {})", id, task.attempts)
+        val claim = claimNext() ?: return
+        val task = tasks.findById(claim.id).orElseThrow()
+        log.info("task {} started (attempt {})", claim.id, claim.attempts)
 
-        try {
-            val text = runClaude(task)
-            documents.save(Document(task.id, extractTitle(text, task.instruction), text))
-            task.status = TaskStatus.DONE
-            task.error = null
-            task.finishedAt = OffsetDateTime.now()
-            log.info("task {} done", id)
+        val text = try {
+            runClaude(task)
         } catch (e: Exception) {
-            log.error("task {} failed", id, e)
-            task.error = e.message?.take(1000)
-            if (task.attempts >= MAX_ATTEMPTS) {
-                task.status = TaskStatus.FAILED
-                task.finishedAt = OffsetDateTime.now()
-            } else {
-                task.status = TaskStatus.PENDING
-            }
+            log.error("task {} failed", claim.id, e)
+            if (!fail(claim, e.message?.take(1000))) log.warn("task {} 소유권을 잃어 실패 기록을 버림", claim.id)
+            return
         }
-        tasks.save(task)
+
+        if (complete(claim, extractTitle(text, task.instruction), text)) {
+            log.info("task {} done", claim.id)
+        } else {
+            log.warn("task {} 소유권을 잃어 결과를 버림 (attempt {})", claim.id, claim.attempts)
+        }
     }
+
+    /**
+     * 상태 변경과 문서 저장을 한 트랜잭션으로 처리한다.
+     * 그 사이 stale 복구로 다른 워커가 작업을 다시 가져갔다면(attempts가 다름) 아무것도 쓰지 않는다.
+     */
+    private fun complete(claim: Claim, title: String, content: String): Boolean =
+        tx.execute {
+            val owned = jdbc.sql(
+                """
+                update tasks
+                   set status = 'DONE', error = null, finished_at = now()
+                 where id = :id and status = 'RUNNING' and attempts = :attempts
+                """.trimIndent()
+            ).param("id", claim.id).param("attempts", claim.attempts).update() == 1
+            if (owned) {
+                jdbc.sql(
+                    """
+                    insert into documents (id, task_id, title, content)
+                    values (:docId, :taskId, :title, :content)
+                    on conflict (task_id) do nothing
+                    """.trimIndent()
+                )
+                    .param("docId", UUID.randomUUID())
+                    .param("taskId", claim.id)
+                    .param("title", title)
+                    .param("content", content)
+                    .update()
+            }
+            owned
+        } == true
+
+    private fun fail(claim: Claim, error: String?): Boolean =
+        jdbc.sql(
+            """
+            update tasks
+               set error = :error,
+                   status = case when attempts >= $MAX_ATTEMPTS then 'FAILED' else 'PENDING' end,
+                   finished_at = case when attempts >= $MAX_ATTEMPTS then now() end
+             where id = :id and status = 'RUNNING' and attempts = :attempts
+            """.trimIndent()
+        ).param("error", error).param("id", claim.id).param("attempts", claim.attempts).update() == 1
 
     /** 서버가 작업 도중 죽어서 RUNNING에 멈춘 작업을 되살린다 */
     @Scheduled(fixedDelay = 60_000)
@@ -70,7 +109,7 @@ class TaskWorker(
         if (n > 0) log.warn("recovered {} stale tasks", n)
     }
 
-    private fun claimNext(): UUID? =
+    private fun claimNext(): Claim? =
         jdbc.sql(
             """
             update tasks
@@ -82,9 +121,10 @@ class TaskWorker(
                     limit 1
                     for update skip locked
              )
-            returning id
+            returning id, attempts
             """.trimIndent()
-        ).query(UUID::class.java).optional().orElse(null)
+        ).query { rs, _ -> Claim(rs.getObject("id", UUID::class.java), rs.getInt("attempts")) }
+            .optional().orElse(null)
 
     private fun runClaude(task: Task): String {
         val prompt = buildString {
