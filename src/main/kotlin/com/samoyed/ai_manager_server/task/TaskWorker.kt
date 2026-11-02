@@ -2,6 +2,7 @@ package com.samoyed.ai_manager_server.task
 
 import com.anthropic.client.AnthropicClient
 import com.anthropic.models.messages.MessageCreateParams
+import com.anthropic.models.messages.StopReason
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -20,6 +21,10 @@ private val STALE_AFTER: Duration = Duration.ofMinutes(10)
 /** Task용 Claude 호출 제한. 재시도까지 포함해도 STALE_AFTER 안에 끝나야 한다 */
 private val CLAUDE_TIMEOUT: Duration = Duration.ofMinutes(4)
 private const val CLAUDE_MAX_RETRIES = 1
+private const val MAX_OUTPUT_TOKENS = 8192L
+
+/** 다시 시도해도 같은 결과가 나오는 실패 (잘림, 거절 등) */
+private class NonRetryableTaskException(message: String) : RuntimeException(message)
 
 /** claim 시점의 attempts가 소유권 토큰 역할을 한다 */
 private data class Claim(val id: UUID, val attempts: Int)
@@ -55,9 +60,13 @@ class TaskWorker(
 
         val text = try {
             runClaude(task)
+        } catch (e: NonRetryableTaskException) {
+            log.warn("task {} failed without retry: {}", claim.id, e.message)
+            if (!fail(claim, e.message, retryable = false)) log.warn("task {} 소유권을 잃어 실패 기록을 버림", claim.id)
+            return
         } catch (e: Exception) {
             log.error("task {} failed", claim.id, e)
-            if (!fail(claim, e.message?.take(1000))) log.warn("task {} 소유권을 잃어 실패 기록을 버림", claim.id)
+            if (!fail(claim, e.message?.take(1000), retryable = true)) log.warn("task {} 소유권을 잃어 실패 기록을 버림", claim.id)
             return
         }
 
@@ -98,16 +107,25 @@ class TaskWorker(
             owned
         } == true
 
-    private fun fail(claim: Claim, error: String?): Boolean =
-        jdbc.sql(
+    /** retryable이 false면 남은 시도 횟수와 상관없이 바로 FAILED로 끝낸다 */
+    private fun fail(claim: Claim, error: String?, retryable: Boolean): Boolean {
+        val giveUp = !retryable || claim.attempts >= MAX_ATTEMPTS
+        return jdbc.sql(
             """
             update tasks
                set error = :error,
-                   status = case when attempts >= $MAX_ATTEMPTS then 'FAILED' else 'PENDING' end,
-                   finished_at = case when attempts >= $MAX_ATTEMPTS then now() end
+                   status = :status,
+                   finished_at = case when :giveUp then now() end
              where id = :id and status = 'RUNNING' and attempts = :attempts
             """.trimIndent()
-        ).param("error", error).param("id", claim.id).param("attempts", claim.attempts).update() == 1
+        )
+            .param("error", error)
+            .param("status", if (giveUp) "FAILED" else "PENDING")
+            .param("giveUp", giveUp)
+            .param("id", claim.id)
+            .param("attempts", claim.attempts)
+            .update() == 1
+    }
 
     /** 서버가 작업 도중 죽어서 RUNNING에 멈춘 작업을 되살린다 */
     @Scheduled(fixedDelay = 60_000)
@@ -155,7 +173,7 @@ class TaskWorker(
 
         val params = MessageCreateParams.builder()
             .model(model)
-            .maxTokens(8192)
+            .maxTokens(MAX_OUTPUT_TOKENS)
             .system(TASK_SYSTEM.trimIndent() + "\n\n" + context.forClaude())
             .addUserMessage(prompt)
             .build()
@@ -165,9 +183,23 @@ class TaskWorker(
             .withOptions { it.timeout(CLAUDE_TIMEOUT).maxRetries(CLAUDE_MAX_RETRIES) }
             .messages()
             .create(params)
-        return message.content()
+        val text = message.content()
             .mapNotNull { it.text().orElse(null)?.text() }
             .joinToString("")
+
+        // 잘렸거나 거절된 응답을 문서로 저장하지 않는다. 같은 요청은 다시 보내도 결과가 같으므로 재시도하지 않는다
+        when (val reason = message.stopReason().orElse(null)) {
+            StopReason.END_TURN, StopReason.STOP_SEQUENCE ->
+                if (text.isBlank()) throw IllegalStateException("Claude 응답에 본문이 없음 (stop_reason=$reason)")
+            StopReason.MAX_TOKENS -> throw NonRetryableTaskException(
+                "출력 한도($MAX_OUTPUT_TOKENS 토큰)에 도달해 문서가 잘림 (output_tokens=${message.usage().outputTokens()})"
+            )
+            StopReason.REFUSAL -> throw NonRetryableTaskException(
+                "Claude가 요청을 거절함 (category=${message.stopDetails().flatMap { it.category() }.map { it.toString() }.orElse("unknown")})"
+            )
+            else -> throw NonRetryableTaskException("예상하지 못한 응답 종료 (stop_reason=$reason)")
+        }
+        return text
     }
 
     private fun extractTitle(text: String, fallback: String): String {

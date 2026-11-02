@@ -1,10 +1,8 @@
 package com.samoyed.ai_manager_server.task
 
 import com.anthropic.client.AnthropicClient
-import com.anthropic.models.messages.ContentBlock
 import com.anthropic.models.messages.Message
 import com.anthropic.models.messages.MessageCreateParams
-import com.anthropic.models.messages.TextBlock
 import com.anthropic.services.blocking.MessageService
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
@@ -14,7 +12,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
 import org.mockito.Answers
-import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 import org.springframework.beans.factory.annotation.Autowired
@@ -43,7 +40,7 @@ class TaskWorkerConcurrencyTest {
     @Autowired lateinit var jdbc: JdbcClient
 
     private val messages: MessageService = mock(MessageService::class.java)
-    private val reply: Message = response()
+    private val reply: Message = claudeResponse()
 
     @BeforeEach
     fun setUp() {
@@ -151,23 +148,6 @@ class TaskWorkerConcurrencyTest {
             { assertEquals(1, documentCount(id), "task 문서 수") },
             { assertDoesNotThrow { controller.get(id) } },
         )
-    }
-
-    private fun response(text: String = "# 테스트 문서\n본문"): Message {
-        val textBlock = mock(TextBlock::class.java)
-        `when`(textBlock.text()).thenReturn(text)
-        val block = mock(ContentBlock::class.java)
-        `when`(block.text()).thenReturn(java.util.Optional.of(textBlock))
-        val message = mock(Message::class.java)
-        `when`(message.content()).thenReturn(listOf(block))
-        return message
-    }
-
-    /** Kotlin으로 작성된 SDK는 null 인자를 거부하므로 matcher만 등록하고 null을 그대로 넘긴다 */
-    @Suppress("UNCHECKED_CAST")
-    private fun <T> anyArg(type: Class<T>): T {
-        any(type)
-        return null as T
     }
 
     private fun countByStatus(status: String): Int =
