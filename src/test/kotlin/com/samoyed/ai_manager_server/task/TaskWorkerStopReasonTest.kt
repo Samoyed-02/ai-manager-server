@@ -1,11 +1,16 @@
 package com.samoyed.ai_manager_server.task
 
 import com.anthropic.client.AnthropicClient
+import com.anthropic.core.http.Headers
+import com.anthropic.errors.RateLimitException
+import com.anthropic.errors.UnauthorizedException
 import com.anthropic.models.messages.Message
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.StopReason
 import com.anthropic.services.blocking.MessageService
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
+import com.samoyed.ai_manager_server.claude.API_ERROR_BODY
+import com.samoyed.ai_manager_server.claude.ClaudeErrorKind
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -82,6 +87,35 @@ class TaskWorkerStopReasonTest {
             { assertNull(row.finishedAt) },
             { assertTrue(row.error!!.contains("본문이 없음"), row.error) },
             { assertEquals(0, documentCount(id)) },
+        )
+    }
+
+    @Test
+    fun `다시 해도 같은 결과인 API 오류는 재시도 없이 실패하고 원문은 저장하지 않는다`() {
+        val id = tasks.save(Task("document", "문서 작성")).id
+        `when`(messages.create(anyArg(MessageCreateParams::class.java)))
+            .thenThrow(UnauthorizedException.builder().headers(Headers.builder().build()).body(API_ERROR_BODY).build())
+        worker.poll()
+
+        val row = row(id)
+        assertAll(
+            { assertEquals("FAILED", row.status) },
+            { assertEquals(1, row.attempts) },
+            { assertEquals(ClaudeErrorKind.CONFIG.userMessage, row.error) },
+        )
+    }
+
+    @Test
+    fun `일시적인 API 오류는 재시도 대기로 돌아가고 원문은 저장하지 않는다`() {
+        val id = tasks.save(Task("document", "문서 작성")).id
+        `when`(messages.create(anyArg(MessageCreateParams::class.java)))
+            .thenThrow(RateLimitException.builder().headers(Headers.builder().build()).body(API_ERROR_BODY).build())
+        worker.poll()
+
+        val row = row(id)
+        assertAll(
+            { assertEquals("PENDING", row.status) },
+            { assertEquals(ClaudeErrorKind.RATE_LIMITED.userMessage, row.error) },
         )
     }
 

@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionTemplate
 import java.time.Duration
 import java.util.UUID
+import com.samoyed.ai_manager_server.claude.classifyClaudeError
 import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val MAX_ATTEMPTS = 3
@@ -23,8 +24,8 @@ private val CLAUDE_TIMEOUT: Duration = Duration.ofMinutes(4)
 private const val CLAUDE_MAX_RETRIES = 1
 private const val MAX_OUTPUT_TOKENS = 8192L
 
-/** 다시 시도해도 같은 결과가 나오는 실패 (잘림, 거절 등) */
-private class NonRetryableTaskException(message: String) : RuntimeException(message)
+/** 직접 판정한 실패. message는 사용자에게 보여줘도 되는 문구라 그대로 tasks.error에 저장한다 */
+private class TaskFailureException(message: String, val retryable: Boolean) : RuntimeException(message)
 
 /** claim 시점의 attempts가 소유권 토큰 역할을 한다 */
 private data class Claim(val id: UUID, val attempts: Int)
@@ -60,13 +61,15 @@ class TaskWorker(
 
         val text = try {
             runClaude(task)
-        } catch (e: NonRetryableTaskException) {
-            log.warn("task {} failed without retry: {}", claim.id, e.message)
-            if (!fail(claim, e.message, retryable = false)) log.warn("task {} 소유권을 잃어 실패 기록을 버림", claim.id)
+        } catch (e: TaskFailureException) {
+            log.warn("task {} failed (retryable={}): {}", claim.id, e.retryable, e.message)
+            if (!fail(claim, e.message, e.retryable)) log.warn("task {} 소유권을 잃어 실패 기록을 버림", claim.id)
             return
         } catch (e: Exception) {
-            log.error("task {} failed", claim.id, e)
-            if (!fail(claim, e.message?.take(1000), retryable = true)) log.warn("task {} 소유권을 잃어 실패 기록을 버림", claim.id)
+            // 원문(상태 코드, 응답 본문 등)은 로그에만 남기고 tasks.error에는 사용자용 문구만 저장한다
+            val kind = classifyClaudeError(e)
+            log.error("task {} failed ({})", claim.id, kind, e)
+            if (!fail(claim, kind.userMessage, kind.retryable)) log.warn("task {} 소유권을 잃어 실패 기록을 버림", claim.id)
             return
         }
 
@@ -190,14 +193,16 @@ class TaskWorker(
         // 잘렸거나 거절된 응답을 문서로 저장하지 않는다. 같은 요청은 다시 보내도 결과가 같으므로 재시도하지 않는다
         when (val reason = message.stopReason().orElse(null)) {
             StopReason.END_TURN, StopReason.STOP_SEQUENCE ->
-                if (text.isBlank()) throw IllegalStateException("Claude 응답에 본문이 없음 (stop_reason=$reason)")
-            StopReason.MAX_TOKENS -> throw NonRetryableTaskException(
-                "출력 한도($MAX_OUTPUT_TOKENS 토큰)에 도달해 문서가 잘림 (output_tokens=${message.usage().outputTokens()})"
+                if (text.isBlank()) throw TaskFailureException("Claude 응답에 본문이 없음 (stop_reason=$reason)", retryable = true)
+            StopReason.MAX_TOKENS -> throw TaskFailureException(
+                "출력 한도($MAX_OUTPUT_TOKENS 토큰)에 도달해 문서가 잘림 (output_tokens=${message.usage().outputTokens()})",
+                retryable = false,
             )
-            StopReason.REFUSAL -> throw NonRetryableTaskException(
-                "Claude가 요청을 거절함 (category=${message.stopDetails().flatMap { it.category() }.map { it.toString() }.orElse("unknown")})"
+            StopReason.REFUSAL -> throw TaskFailureException(
+                "Claude가 요청을 거절함 (category=${message.stopDetails().flatMap { it.category() }.map { it.toString() }.orElse("unknown")})",
+                retryable = false,
             )
-            else -> throw NonRetryableTaskException("예상하지 못한 응답 종료 (stop_reason=$reason)")
+            else -> throw TaskFailureException("예상하지 못한 응답 종료 (stop_reason=$reason)", retryable = false)
         }
         return text
     }
