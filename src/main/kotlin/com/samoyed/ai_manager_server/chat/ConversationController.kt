@@ -11,7 +11,7 @@ import org.springframework.web.server.ResponseStatusException
 import java.time.OffsetDateTime
 import java.util.UUID
 
-data class ConversationDto(val id: UUID, val title: String?, val updatedAt: OffsetDateTime)
+data class ConversationDto(val id: UUID, val title: String?, val channel: ConversationChannel, val updatedAt: OffsetDateTime)
 data class MessageDto(
     val id: Long,
     val role: String,
@@ -29,7 +29,7 @@ class ConversationController(
     @GetMapping
     fun list(): List<ConversationDto> =
         conversations.findTop50ByOrderByUpdatedAtDesc()
-            .map { ConversationDto(it.id, it.title, it.updatedAt) }
+            .map { ConversationDto(it.id, it.title, it.channel, it.updatedAt) }
 
     @GetMapping("/{id}/messages")
     fun messages(@PathVariable id: UUID): List<MessageDto> =

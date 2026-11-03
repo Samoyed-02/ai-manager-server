@@ -22,7 +22,7 @@ import com.samoyed.ai_manager_server.claude.logClaudeCall
 import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val SYSTEM_PROMPT = """
-너는 사용자의 개인 AI 매니저야. 아래 사용자 프로필을 참고해서 맞춤형으로 답해.
+너는 사용자의 개인 AI 매니저야. 아래 사용자 프로필과 지난 대화에서 기억하는 것을 참고해서 맞춤형으로 답해.
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
 최신 정보나 사실 확인이 필요할 때만 웹 검색을 쓰고, 일반 지식이나 대화 내용만으로 답할 수 있으면 검색하지 마.
 출처 목록은 서버가 답변 끝에 붙이니 직접 쓰지 마.
@@ -135,7 +135,7 @@ class ChatService(
         var toolRounds = 0
         var toolCalls = 0
         var taskCreated = false
-        var params = buildParams(prepared.history)
+        var params = buildParams(prepared)
         val startedAt = System.nanoTime()
         try {
             while (true) {
@@ -330,14 +330,14 @@ class ChatService(
             "- [$title](${source.url})"
         }
 
-    private fun buildParams(history: List<ChatMessage>): MessageCreateParams =
+    private fun buildParams(prepared: PreparedChat): MessageCreateParams =
         MessageCreateParams.builder()
             .model(model)
             .maxTokens(4096)
-            .system(SYSTEM_PROMPT.trimIndent() + "\n\n" + context.forClaude())
+            .system(SYSTEM_PROMPT.trimIndent() + "\n\n" + context.forClaude(prepared.conversationId))
             .tools(WEB_TOOLS + ToolUnion.ofTool(createTask.definition))
             .apply {
-                history.forEach {
+                prepared.history.forEach {
                     if (it.role == "user") addUserMessage(it.content) else addAssistantMessage(it.content)
                 }
             }

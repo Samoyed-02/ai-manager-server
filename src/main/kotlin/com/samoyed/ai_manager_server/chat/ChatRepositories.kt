@@ -1,6 +1,7 @@
 package com.samoyed.ai_manager_server.chat
 
 import jakarta.persistence.LockModeType
+import org.springframework.data.domain.Limit
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Modifying
@@ -10,6 +11,9 @@ import java.util.UUID
 
 interface ConversationRepository : JpaRepository<Conversation, UUID> {
     fun findTop50ByOrderByUpdatedAtDesc(): List<Conversation>
+
+    /** 맥락에 넣을 최근 대화 요약 */
+    fun findBySummaryIsNotNullOrderByUpdatedAtDesc(limit: Limit): List<Conversation>
 
     /** 답변 저장과 대화 삭제가 겹치지 않게 행을 잠근다. 이미 삭제됐으면 null */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
