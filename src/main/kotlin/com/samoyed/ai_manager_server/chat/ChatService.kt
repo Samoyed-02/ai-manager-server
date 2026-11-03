@@ -1,6 +1,11 @@
 package com.samoyed.ai_manager_server.chat
 
 import com.anthropic.client.AnthropicClient
+import com.anthropic.models.messages.ContentBlockParam
+import com.anthropic.models.messages.ToolResultBlockParam
+import com.fasterxml.jackson.core.type.TypeReference
+import com.samoyed.ai_manager_server.tool.ToolContext
+import com.samoyed.ai_manager_server.tool.ToolRegistry
 import com.anthropic.helpers.MessageAccumulator
 import com.anthropic.models.messages.Message
 import com.anthropic.models.messages.MessageCreateParams
@@ -26,7 +31,8 @@ private const val SYSTEM_PROMPT = """
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
 최신 정보나 사실 확인이 필요할 때만 웹 검색을 쓰고, 일반 지식이나 대화 내용만으로 답할 수 있으면 검색하지 마.
 출처 목록은 서버가 답변 끝에 붙이니 직접 쓰지 마.
-긴 문서를 써 달라는 분명한 요청이면 create_task 도구로 작성자에게 맡기고, 맡겼다고 짧게 알려 줘.
+말로 요청한 일은 도구로 처리해: 긴 문서 작성은 create_task, "기억해"는 save_memory, 반복 알림·브리핑은 루틴 도구, 한 일은 log_activity.
+도구로 처리했으면 무엇을 했는지 짧게 알려 주고, 삭제처럼 되돌릴 수 없는 일은 먼저 확인받아.
 """
 
 /** 질문 하나에 쓸 수 있는 웹 검색·페이지 읽기 횟수. 검색은 1,000회당 $10 */
@@ -36,8 +42,8 @@ private const val MAX_WEB_FETCHES = 3L
 private const val MAX_FETCH_CONTENT_TOKENS = 20_000L
 /** 서버 쪽 도구 반복이 한도에 걸려 pause_turn으로 끝나면 이어 받는 최대 횟수 */
 private const val MAX_CONTINUATIONS = 3
-/** 우리 서버가 실행하는 도구(create_task)의 결과를 돌려주고 이어 받는 최대 횟수 */
-private const val MAX_TOOL_ROUNDS = 2
+/** 우리 서버가 실행하는 도구의 결과를 돌려주고 이어 받는 최대 횟수. 목록을 본 뒤 수정하는 식으로 연달아 쓸 수 있게 한다 */
+private const val MAX_TOOL_ROUNDS = 4
 private const val MAX_SOURCES = 10
 
 private val WEB_TOOLS = listOf(
@@ -73,6 +79,8 @@ sealed interface ChatEvent {
     data class Done(val status: MessageStatus) : ChatEvent
     /** create_task 도구로 작업을 만들었다 */
     data class TaskCreated(val taskId: UUID, val instruction: String) : ChatEvent
+    /** 그 밖의 도구로 무언가를 했다. summary는 사용자에게 보여줄 한 줄 */
+    data class Action(val tool: String, val summary: String) : ChatEvent
     /** code: ClaudeErrorKind 이름 또는 REFUSED / EMPTY_RESPONSE. message는 사용자에게 보여줄 문구 */
     data class Error(val code: String, val message: String) : ChatEvent {
         companion object {
@@ -88,7 +96,7 @@ class ChatService(
     private val messages: ChatMessageRepository,
     private val context: ContextService,
     private val tx: TransactionTemplate,
-    private val createTask: CreateTaskTool,
+    private val tools: ToolRegistry,
     @Value("\${claude.model}") private val model: String,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -134,7 +142,8 @@ class ChatService(
         var continuations = 0
         var toolRounds = 0
         var toolCalls = 0
-        var taskCreated = false
+        val usedInReply = mutableMapOf<String, Int>()
+        val toolContext = ToolContext(ConversationChannel.CHAT, prepared.conversationId)
         var params = buildParams(prepared)
         val startedAt = System.nanoTime()
         try {
@@ -156,16 +165,17 @@ class ChatService(
                     stopReason == StopReason.TOOL_USE && toolRounds < MAX_TOOL_ROUNDS -> {
                         val results = message.content().mapNotNull { it.toolUse().orElse(null) }.map { block ->
                             toolCalls++
-                            val outcome = if (block.name() == CREATE_TASK_TOOL) {
-                                createTask.run(block, prepared.conversationId, alreadyCreated = taskCreated)
-                            } else {
-                                createTask.unknown(block)
+                            val input = runCatching { block._input().convert(object : TypeReference<Map<String, Any?>>() {}) }.getOrNull()
+                            val outcome = tools.execute(block.name(), input, toolContext, usedInReply)
+                            when {
+                                outcome.task != null -> emit(ChatEvent.TaskCreated(outcome.task.id, outcome.task.instruction))
+                                outcome.ok && outcome.summary != null -> emit(ChatEvent.Action(block.name(), outcome.summary))
                             }
-                            outcome.task?.let {
-                                taskCreated = true
-                                emit(ChatEvent.TaskCreated(it.id, it.instruction))
-                            }
-                            outcome.result
+                            ContentBlockParam.ofToolResult(
+                                ToolResultBlockParam.builder()
+                                    .toolUseId(block.id()).content(outcome.content).isError(!outcome.ok)
+                                    .build()
+                            )
                         }
                         if (results.isEmpty()) break
                         params = params.toBuilder().addMessage(message).addUserMessageOfBlockParams(results).build()
@@ -335,7 +345,7 @@ class ChatService(
             .model(model)
             .maxTokens(4096)
             .system(SYSTEM_PROMPT.trimIndent() + "\n\n" + context.forClaude(prepared.conversationId))
-            .tools(WEB_TOOLS + ToolUnion.ofTool(createTask.definition))
+            .tools(WEB_TOOLS + tools.claudeDefinitions.map { ToolUnion.ofTool(it) })
             .apply {
                 prepared.history.forEach {
                     if (it.role == "user") addUserMessage(it.content) else addAssistantMessage(it.content)

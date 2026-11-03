@@ -55,7 +55,7 @@ class ChatCreateTaskToolTest {
 
         chat.respond(chat.prepare(null, "질문")) { events += it }
 
-        val tool = sent.single().tools().get().single { it.isTool() }.asTool()
+        val tool = sent.single().tools().get().filter { it.isTool() }.map { it.asTool() }.single { it.name() == "create_task" }
         assertAll(
             { assertEquals("create_task", tool.name()) },
             { assertEquals(true, tool.eagerInputStreaming().get()) },
@@ -187,14 +187,14 @@ class ChatCreateTaskToolTest {
     fun `도구 이어 받기 한도를 넘기면 TRUNCATED로 저장한다`() {
         val prepared = chat.prepare(null, "계속 맡겨줘")
         val round = { n: Int -> chatStream { start(); text("$n."); toolUse("create_task", mapOf("instruction" to "")); end("tool_use") } }
-        val sent = messageService.streamsInOrder(round(1), round(2), round(3))
+        val sent = messageService.streamsInOrder(round(1), round(2), round(3), round(4), round(5))
 
         chat.respond(prepared) { events += it }
 
         assertAll(
-            // 첫 요청 + 도구 결과를 돌려주며 이어 받기 2번
-            { assertEquals(3, sent.size) },
-            { assertEquals("1.2.3.", lastAssistant(prepared.conversationId).content) },
+            // 첫 요청 + 도구 결과를 돌려주며 이어 받기 4번
+            { assertEquals(5, sent.size) },
+            { assertEquals("1.2.3.4.5.", lastAssistant(prepared.conversationId).content) },
             { assertEquals(MessageStatus.TRUNCATED, lastAssistant(prepared.conversationId).status) },
         )
     }

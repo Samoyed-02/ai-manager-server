@@ -47,6 +47,7 @@ class ChatController(private val chat: ChatService) {
         is ChatEvent.Delta -> event("delta", mapOf("text" to text))
         is ChatEvent.Done -> event("done", mapOf("status" to status))
         is ChatEvent.TaskCreated -> event("task", mapOf("taskId" to taskId, "instruction" to instruction))
+        is ChatEvent.Action -> event("action", mapOf("tool" to tool, "summary" to summary))
         is ChatEvent.Error -> event("error", mapOf("code" to code, "message" to message))
     }
 
