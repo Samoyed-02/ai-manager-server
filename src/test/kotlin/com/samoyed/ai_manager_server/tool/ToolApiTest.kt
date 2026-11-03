@@ -54,12 +54,15 @@ class ToolApiTest {
     fun `도구 목록을 함수 선언 형태로 준다`() {
         mvc.get("/tools") { header(HEADER, PASSCODE) }.andExpect {
             status { isOk() }
-            jsonPath("$.length()") { value(7) }
-            listOf("create_routine", "create_task", "delete_routine", "list_routines", "log_activity", "save_memory", "update_routine")
+            jsonPath("$.length()") { value(10) }
+            listOf(
+                "create_goal", "create_routine", "create_task", "delete_routine", "list_goals",
+                "list_routines", "log_activity", "save_memory", "update_goal", "update_routine",
+            )
                 .forEachIndexed { i, name -> jsonPath("$[$i].name") { value(name) } }
-            jsonPath("$[0].parameters.type") { value("object") }
-            jsonPath("$[0].parameters.required.length()") { value(4) }
-            listOf("title", "kind", "message", "time").forEachIndexed { i, field -> jsonPath("$[0].parameters.required[$i]") { value(field) } }
+            jsonPath("$[1].parameters.type") { value("object") }
+            jsonPath("$[1].parameters.required.length()") { value(4) }
+            listOf("title", "kind", "message", "time").forEachIndexed { i, field -> jsonPath("$[1].parameters.required[$i]") { value(field) } }
         }
     }
 

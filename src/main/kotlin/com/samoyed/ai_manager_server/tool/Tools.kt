@@ -4,6 +4,14 @@ import com.samoyed.ai_manager_server.activity.ActivityCategory
 import com.samoyed.ai_manager_server.activity.ActivityLog
 import com.samoyed.ai_manager_server.activity.ActivityLogRepository
 import com.samoyed.ai_manager_server.activity.MAX_ACTIVITY_DESCRIPTION
+import com.samoyed.ai_manager_server.goal.Goal
+import com.samoyed.ai_manager_server.goal.GoalChange
+import com.samoyed.ai_manager_server.goal.GoalRepository
+import com.samoyed.ai_manager_server.goal.GoalService
+import com.samoyed.ai_manager_server.goal.GoalStatus
+import com.samoyed.ai_manager_server.goal.GoalValidationException
+import com.samoyed.ai_manager_server.goal.MAX_GOAL_DESCRIPTION
+import com.samoyed.ai_manager_server.goal.MAX_GOAL_TITLE
 import com.samoyed.ai_manager_server.memory.MAX_MEMORY_CONTENT
 import com.samoyed.ai_manager_server.memory.Memory
 import com.samoyed.ai_manager_server.memory.MemoryCategory
@@ -111,13 +119,14 @@ class CreateRoutineTool(private val service: RoutineService) : AgentTool {
         정해진 시각(한국 시간)에 반복 실행되는 루틴을 등록한다. 결과는 알림함에 쌓이고 다음 대화에서 사용자에게 전한다.
         kind=REMINDER: message를 그대로 알림으로 보낸다. 예: "매일 밤 10시에 오늘 공부한 거 기록하라고 알려줘"
         kind=BRIEFING: message를 지시로 삼아 AI가 사용자의 기억·활동 기록·작업을 보고 브리핑을 작성한다. 예: "매일 아침 8시에 오늘 할 일 정리해줘"
+        kind=REVIEW: 지난 7일 활동 통계와 목표 달성률로 회고를 작성한다. 기본 주간 회고(일요일 21:00)가 이미 있으니, 새로 만들기 전에 list_routines로 확인해.
         시각이나 요일이 애매하면 등록하기 전에 물어봐.
     """.trimIndent()
     override val inputSchema = objectSchema(
         listOf("title", "kind", "message", "time"),
         "title" to stringProp("루틴 이름. 예: '아침 브리핑'", MAX_ROUTINE_TITLE),
-        "kind" to stringProp("REMINDER 또는 BRIEFING", enum = RoutineKind.entries.map { it.name }),
-        "message" to stringProp("REMINDER면 보낼 문구, BRIEFING이면 브리핑에 담을 내용 지시", MAX_ROUTINE_MESSAGE),
+        "kind" to stringProp("REMINDER, BRIEFING, REVIEW 중 하나", enum = RoutineKind.entries.map { it.name }),
+        "message" to stringProp("REMINDER면 보낼 문구, BRIEFING·REVIEW면 담을 내용 지시", MAX_ROUTINE_MESSAGE),
         "time" to stringProp("실행 시각 HH:mm (24시간, 한국 시간)", pattern = "^\\d{1,2}:\\d{2}$"),
         "days" to daysProp(),
     )
@@ -159,7 +168,7 @@ class UpdateRoutineTool(private val service: RoutineService) : AgentTool {
         "id" to stringProp("루틴 id"),
         "enabled" to mapOf("type" to "boolean", "description" to "false면 끄고 true면 켠다"),
         "title" to stringProp("새 이름", MAX_ROUTINE_TITLE),
-        "kind" to stringProp("REMINDER 또는 BRIEFING", enum = RoutineKind.entries.map { it.name }),
+        "kind" to stringProp("REMINDER, BRIEFING, REVIEW 중 하나", enum = RoutineKind.entries.map { it.name }),
         "message" to stringProp("새 문구나 지시", MAX_ROUTINE_MESSAGE),
         "time" to stringProp("새 시각 HH:mm", pattern = "^\\d{1,2}:\\d{2}$"),
         "days" to daysProp(),
@@ -206,11 +215,12 @@ class DeleteRoutineTool(private val service: RoutineService) : AgentTool {
 }
 
 @Component
-class LogActivityTool(private val activities: ActivityLogRepository) : AgentTool {
+class LogActivityTool(private val activities: ActivityLogRepository, private val goals: GoalRepository) : AgentTool {
     override val name = "log_activity"
     override val description = """
         사용자가 한 일을 기록한다. 예: "오늘 알고리즘 2시간 했어", "어제 헬스 1시간". 성장 기록과 회고에 쓰인다.
         시간을 말하지 않았으면 minutes는 비운다. 날짜를 말하지 않았으면 date는 비운다(오늘로 기록).
+        진행 중인 목표와 관련된 활동이면 goal_id를 넣어 목표에 연결해(목표 진행률에 반영된다). id는 맥락의 목표 목록이나 list_goals로 확인해.
     """.trimIndent()
     override val inputSchema = objectSchema(
         listOf("description", "category"),
@@ -218,6 +228,7 @@ class LogActivityTool(private val activities: ActivityLogRepository) : AgentTool
         "category" to stringProp("STUDY 공부, EXERCISE 운동, WORK 일, OTHER 기타", enum = ActivityCategory.entries.map { it.name }),
         "minutes" to mapOf("type" to "integer", "description" to "걸린 시간(분), 1~1440", "minimum" to 1, "maximum" to 1440),
         "date" to stringProp("한 날짜 YYYY-MM-DD (한국 날짜). 생략하면 오늘"),
+        "goal_id" to stringProp("연결할 진행 중인 목표 id (선택)"),
     )
     override val maxPerReply = 5
 
@@ -225,6 +236,10 @@ class LogActivityTool(private val activities: ActivityLogRepository) : AgentTool
         val today = LocalDate.now(RoutineSchedule.ZONE)
         val date = input.optionalDate("date") ?: today
         if (date.isAfter(today)) throw ToolInputException("date 는 미래일 수 없어.")
+        val goal = input.optionalString("goal_id", 36)?.let { input.uuid("goal_id") }?.let { id ->
+            goals.findById(id).orElse(null)?.takeIf { it.status == GoalStatus.ACTIVE }
+                ?: throw ToolInputException("goal_id $id 은(는) 진행 중인 목표가 아니야. list_goals로 확인하거나 goal_id 없이 기록해.")
+        }
         val log = activities.save(
             ActivityLog(
                 category = input.enum<ActivityCategory>("category"),
@@ -232,9 +247,105 @@ class LogActivityTool(private val activities: ActivityLogRepository) : AgentTool
                 minutes = input.optionalInt("minutes", 1..1440),
                 occurredOn = date,
                 sourceConversationId = ctx.conversationId,
+                goalId = goal?.id,
             )
         )
         val time = log.minutes?.let { " ${it}분" } ?: ""
-        return ToolResult(true, json("activity_id" to log.id, "date" to log.occurredOn), "활동 기록: ${log.description}$time")
+        val linked = goal?.let { " → ${it.title}" } ?: ""
+        return ToolResult(true, json("activity_id" to log.id, "date" to log.occurredOn, "goal_id" to goal?.id), "활동 기록: ${log.description}$time$linked")
+    }
+}
+
+private fun GoalService.toJson(goal: Goal): String {
+    val p = progress(goal)
+    return json(
+        "id" to goal.id, "title" to goal.title, "category" to goal.category.name, "status" to goal.status.name,
+        "weekly_target_minutes" to goal.weeklyTargetMinutes, "due_date" to goal.dueDate,
+        "this_week_minutes" to p.weekMinutes, "progress" to p.line(),
+    )
+}
+
+@Component
+class CreateGoalTool(private val service: GoalService) : AgentTool {
+    override val name = "create_goal"
+    override val description = """
+        사용자가 이루려는 목표를 등록한다. 예: "12월까지 정보처리기사 합격, 주 10시간 공부할 거야".
+        주간 목표 시간이나 마감일을 말했으면 넣고, 말하지 않았으면 비운다. 진행 중인 목표는 최대 10개.
+        이미 비슷한 목표가 있으면 새로 만들지 말고 update_goal로 고쳐.
+    """.trimIndent()
+    override val inputSchema = objectSchema(
+        listOf("title", "category"),
+        "title" to stringProp("목표. 예: '정보처리기사 합격'", MAX_GOAL_TITLE),
+        "category" to stringProp("STUDY 공부, EXERCISE 운동, WORK 일, OTHER 기타", enum = ActivityCategory.entries.map { it.name }),
+        "description" to stringProp("목표에 대한 설명이나 계획 (선택)", MAX_GOAL_DESCRIPTION),
+        "weekly_target_minutes" to mapOf("type" to "integer", "description" to "한 주(월~일)에 쓸 목표 시간(분). 예: 주 10시간 = 600", "minimum" to 1, "maximum" to 10080),
+        "due_date" to stringProp("마감일 YYYY-MM-DD (선택)"),
+    )
+    override val maxPerReply = 3
+
+    override fun run(input: ToolInput, ctx: ToolContext): ToolResult {
+        val goal = try {
+            service.create(
+                input.string("title", MAX_GOAL_TITLE), input.enum<ActivityCategory>("category"),
+                input.optionalString("description", MAX_GOAL_DESCRIPTION),
+                input.optionalInt("weekly_target_minutes", 1..10_080), input.optionalDate("due_date"),
+            )
+        } catch (e: GoalValidationException) {
+            return ToolResult.error(e.message!!)
+        }
+        return ToolResult(true, service.toJson(goal), "목표 등록: ${goal.title}")
+    }
+}
+
+@Component
+class ListGoalsTool(private val service: GoalService, private val goals: GoalRepository) : AgentTool {
+    override val name = "list_goals"
+    override val description = "목표 목록을 id, 상태, 이번 주 진행 시간과 함께 본다. 목표를 고치거나 활동을 연결하기 전에 id를 확인할 때 쓴다."
+    override val inputSchema = objectSchema(
+        emptyList(),
+        "status" to stringProp("ACTIVE 진행 중, DONE 달성, DROPPED 중단. 생략하면 진행 중만", enum = GoalStatus.entries.map { it.name }),
+    )
+    override val maxPerReply: Int? = null
+
+    override fun run(input: ToolInput, ctx: ToolContext): ToolResult {
+        val status = input.optionalEnum<GoalStatus>("status") ?: GoalStatus.ACTIVE
+        return ToolResult(true, goals.findByStatusOrderByCreatedAtAsc(status).joinToString(",", "[", "]") { service.toJson(it) })
+    }
+}
+
+@Component
+class UpdateGoalTool(private val service: GoalService) : AgentTool {
+    override val name = "update_goal"
+    override val description = """
+        목표를 고친다. 바꿀 항목만 넣는다. 달성했으면 status=DONE, 그만두면 status=DROPPED.
+        상태를 바꾸기 전에는 어떤 목표인지 이름으로 확인받아. id는 list_goals로 먼저 확인해.
+    """.trimIndent()
+    override val inputSchema = objectSchema(
+        listOf("id"),
+        "id" to stringProp("목표 id"),
+        "status" to stringProp("ACTIVE, DONE, DROPPED", enum = GoalStatus.entries.map { it.name }),
+        "title" to stringProp("새 목표", MAX_GOAL_TITLE),
+        "description" to stringProp("새 설명", MAX_GOAL_DESCRIPTION),
+        "category" to stringProp("STUDY, EXERCISE, WORK, OTHER", enum = ActivityCategory.entries.map { it.name }),
+        "weekly_target_minutes" to mapOf("type" to "integer", "description" to "새 주간 목표 시간(분)", "minimum" to 1, "maximum" to 10080),
+        "due_date" to stringProp("새 마감일 YYYY-MM-DD"),
+    )
+    override val maxPerReply = 3
+
+    override fun run(input: ToolInput, ctx: ToolContext): ToolResult {
+        val change = GoalChange(
+            title = input.optionalString("title", MAX_GOAL_TITLE),
+            description = input.optionalString("description", MAX_GOAL_DESCRIPTION),
+            category = input.optionalEnum<ActivityCategory>("category"),
+            weeklyTargetMinutes = input.optionalInt("weekly_target_minutes", 1..10_080),
+            dueDate = input.optionalDate("due_date"),
+            status = input.optionalEnum<GoalStatus>("status"),
+        )
+        val goal = try {
+            service.update(input.uuid("id"), change)
+        } catch (e: GoalValidationException) {
+            return ToolResult.error(e.message!!)
+        }
+        return ToolResult(true, service.toJson(goal), "목표 수정: ${goal.title} (${goal.status.label})")
     }
 }

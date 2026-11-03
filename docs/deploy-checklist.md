@@ -37,6 +37,7 @@
 
 - **웹 검색·페이지 읽기:** 채팅이 `web_search`·`web_fetch` 도구를 쓴다. 조직 설정([Capabilities](https://platform.claude.com/settings/capabilities))에서 기본으로 켜져 있지만, 관리자가 꺼 두었으면 모든 채팅이 400으로 실패한다(사용자에게는 "요청을 처리할 수 없습니다"). 첫 배포 전에 켜져 있는지 확인한다.
 - **기억 추출 비용:** 대화가 끝날 때마다(통화는 저장 즉시, 채팅은 30분 동안 조용하면) Claude를 한 번 더 호출해 기억과 요약을 뽑는다(`claude.usage` 로그의 `kind=memory`). **V6 배포 직후에는 기존 대화가 모두 대상이 되어** 1분에 최대 5개씩 처리된다. 대화가 많으면 그만큼 비용이 나가니, 원하지 않으면 배포 후 `update conversations set memory_processed_at = updated_at;`로 기존 대화를 건너뛴다.
+- **주간 회고 비용:** V8이 기본 주간 회고 루틴(매주 일요일 21:00)을 하나 만든다. 주 1회 Claude 호출이다(`kind=review`). 원하지 않으면 말로 끄거나 `PUT /routines/{id}`로 `enabled=false`.
 - **루틴 브리핑 비용:** `BRIEFING` 루틴은 실행할 때마다 Claude를 한 번 호출한다(`kind=routine`). 매일 1개면 하루 1회다. 루틴은 최대 30개까지 만들 수 있다.
 - **비용:** 웹 검색은 토큰 비용과 별도로 1,000회당 $10다. 질문 하나에 최대 3회로 제한했고, `claude.usage` 로그의 `web_search_requests`로 사용량을 본다. 페이지 읽기는 추가 요금이 없고 읽은 내용만큼 입력 토큰이 늘어난다(페이지당 최대 2만 토큰).
 
