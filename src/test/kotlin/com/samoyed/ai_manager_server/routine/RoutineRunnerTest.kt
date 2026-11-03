@@ -133,7 +133,7 @@ class RoutineRunnerTest {
         runner.poll()
 
         assertAll(
-            { assertTrue(notifications.findAll().single().body.startsWith("브리핑을 만들지 못했어요.")) },
+            { assertTrue(notifications.findAll().single().body.startsWith("브리핑 작성에 실패했어요.")) },
             { assertTrue(routines.findById(id).get().nextRunAt.isAfter(OffsetDateTime.now())) },
         )
     }

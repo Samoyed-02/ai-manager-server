@@ -3,10 +3,10 @@ package com.samoyed.ai_manager_server.routine
 import com.anthropic.client.AnthropicClient
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.StopReason
-import com.samoyed.ai_manager_server.claude.ClaudeCall
+import com.samoyed.ai_manager_server.claude.createLogged
+import com.samoyed.ai_manager_server.claude.text
+import com.samoyed.ai_manager_server.review.ReviewService
 import com.samoyed.ai_manager_server.claude.classifyClaudeError
-import com.samoyed.ai_manager_server.claude.elapsedMs
-import com.samoyed.ai_manager_server.claude.logClaudeCall
 import com.samoyed.ai_manager_server.profile.ContextService
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -38,6 +38,7 @@ class RoutineRunner(
     private val notifications: NotificationRepository,
     private val client: AnthropicClient,
     private val context: ContextService,
+    private val reviews: ReviewService,
     @Value("\${claude.model}") private val model: String,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -56,13 +57,14 @@ class RoutineRunner(
             when (routine.kind) {
                 RoutineKind.REMINDER -> routine.message
                 RoutineKind.BRIEFING -> briefing(routine)
+                RoutineKind.REVIEW -> reviews.generate(routine)
             }
         } catch (e: Exception) {
             val kind = classifyClaudeError(e)
             log.error("routine {} failed ({})", id, kind, e)
             // 일시적인 오류면 claim을 남겨 CLAIM_LEASE 뒤 다시 시도한다. 다시 해도 같은 오류면 실패를 알리고 다음 실행으로 넘어간다
             if (kind.retryable) return
-            "브리핑을 만들지 못했어요. ${kind.userMessage}"
+            "${routine.kind.label} 작성에 실패했어요. ${kind.userMessage}"
         }
         complete(routine, body)
     }
@@ -74,31 +76,9 @@ class RoutineRunner(
             .system(BRIEFING_SYSTEM.trimIndent() + "\n\n" + context.forClaude())
             .addUserMessage("루틴 '${routine.title}'의 지시: ${routine.message}")
             .build()
-        val startedAt = System.nanoTime()
-        val message = try {
-            client.withOptions { it.timeout(CLAUDE_TIMEOUT).maxRetries(1) }.messages().create(params)
-        } catch (e: Exception) {
-            logClaudeCall(
-                ClaudeCall(
-                    kind = "routine", id = routine.id, model = model, stopReason = null,
-                    inputTokens = null, outputTokens = null, cacheReadTokens = null, cacheCreationTokens = null,
-                    durationMs = elapsedMs(startedAt), error = classifyClaudeError(e),
-                )
-            )
-            throw e
-        }
-        val usage = message.usage()
+        val message = client.createLogged(params, "routine", routine.id, model, CLAUDE_TIMEOUT)
         val stopReason = message.stopReason().orElse(null)
-        logClaudeCall(
-            ClaudeCall(
-                kind = "routine", id = routine.id, model = model, stopReason = stopReason,
-                inputTokens = usage.inputTokens(), outputTokens = usage.outputTokens(),
-                cacheReadTokens = usage.cacheReadInputTokens().orElse(null),
-                cacheCreationTokens = usage.cacheCreationInputTokens().orElse(null),
-                durationMs = elapsedMs(startedAt),
-            )
-        )
-        val text = message.content().mapNotNull { it.text().orElse(null)?.text() }.joinToString("").trim()
+        val text = message.text()
         return when {
             stopReason == StopReason.REFUSAL -> "브리핑 요청이 거절됐어요. 루틴 내용을 바꿔 주세요."
             text.isEmpty() -> "브리핑이 비어 있어요."

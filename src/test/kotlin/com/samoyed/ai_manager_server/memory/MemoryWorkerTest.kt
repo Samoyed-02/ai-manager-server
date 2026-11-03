@@ -42,14 +42,14 @@ class MemoryWorkerTest {
     @Autowired lateinit var messages: ChatMessageRepository
     @Autowired lateinit var memories: MemoryRepository
     @Autowired lateinit var jdbc: JdbcClient
+    @Autowired lateinit var goals: com.samoyed.ai_manager_server.goal.GoalService
 
     private val messageService: MessageService = mock(MessageService::class.java)
     private val sent = mutableListOf<MessageCreateParams>()
 
     @BeforeEach
     fun setUp() {
-        jdbc.sql("delete from memories").update()
-        jdbc.sql("delete from conversations").update()
+        listOf("memories", "conversations", "activity_logs", "goals").forEach { jdbc.sql("delete from $it").update() }
         `when`(client.messages()).thenReturn(messageService)
         sent.clear()
     }
@@ -75,6 +75,17 @@ class MemoryWorkerTest {
             { assertTrue(request.outputConfig().get().format().isPresent) },
             { assertTrue(request.messages().single().content().asString().contains("사용자: 매일 아침 7시에 일어나서 알고리즘 공부해")) },
         )
+    }
+
+    @Test
+    fun `목표 목록을 함께 줘서 GOAL 기억으로 중복 저장하지 않게 한다`() {
+        goals.create("정보처리기사 합격", com.samoyed.ai_manager_server.activity.ActivityCategory.STUDY, null, null, null)
+        conversation(ConversationChannel.VOICE, "user" to "정보처리기사 공부했어")
+        replies(extraction("공부 이야기."))
+
+        worker.poll()
+
+        assertTrue(sent.single().messages().single().content().asString().contains("## 목표 목록 (따로 관리됨)\n- 정보처리기사 합격"))
     }
 
     @Test

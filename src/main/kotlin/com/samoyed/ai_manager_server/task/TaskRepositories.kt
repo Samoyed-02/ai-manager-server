@@ -11,6 +11,8 @@ import java.util.UUID
 interface TaskRepository : JpaRepository<Task, UUID> {
     fun findTop20ByOrderByCreatedAtDesc(): List<Task>
 
+    fun countByStatusAndFinishedAtBetween(status: TaskStatus, from: java.time.OffsetDateTime, to: java.time.OffsetDateTime): Long
+
     /**
      * 작업의 문서는 DB의 on delete set null로 남는다.
      * 처리 중인 작업이면 워커가 조건부 update로 결과를 버리므로 취소처럼 동작한다

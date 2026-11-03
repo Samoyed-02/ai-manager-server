@@ -13,6 +13,8 @@ import com.samoyed.ai_manager_server.claude.ClaudeCall
 import com.samoyed.ai_manager_server.claude.classifyClaudeError
 import com.samoyed.ai_manager_server.claude.elapsedMs
 import com.samoyed.ai_manager_server.claude.logClaudeCall
+import com.samoyed.ai_manager_server.goal.GoalRepository
+import com.samoyed.ai_manager_server.goal.GoalStatus
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.domain.Limit
@@ -59,6 +61,7 @@ private const val MEMORY_SYSTEM = """
 규칙
 - 기존 기억과 같은 내용이면 추가하지 마. 내용이 바뀌었으면 update, 더 이상 맞지 않으면 delete.
 - 기억 하나는 한 문장, 200자 이내 한국어. 사용자는 '사용자'로 지칭해.
+- '목표 목록'에 있는 목표와 그 진행 상황은 따로 관리되니 GOAL·PROGRESS 기억으로 중복 저장하지 마.
 - 바꿀 것이 없으면 operations는 빈 배열.
 - summary는 이 대화의 요점을 2~3문장 한국어로. 민감 정보는 빼.
 """
@@ -98,6 +101,7 @@ class MemoryWorker(
     private val client: AnthropicClient,
     private val messages: ChatMessageRepository,
     private val memories: MemoryRepository,
+    private val goals: GoalRepository,
     @Value("\${claude.model}") private val model: String,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -143,12 +147,15 @@ class MemoryWorker(
         val existing = memories.findAllByOrderByUpdatedAtDesc(Limit.of(MAX_MEMORIES_IN_CONTEXT))
             .joinToString("\n") { "- id=${it.id} [${it.category.name}] ${it.content}" }
             .ifBlank { "(없음)" }
+        val goalList = goals.findByStatusOrderByCreatedAtAsc(GoalStatus.ACTIVE)
+            .joinToString("\n") { "- ${it.title}" }
+            .ifBlank { "(없음)" }
 
         val params = MessageCreateParams.builder()
             .model(model)
             .maxTokens(4096)
             .system(MEMORY_SYSTEM.trimIndent())
-            .addUserMessage("## 기존 기억\n$existing\n\n## 대화\n$transcript")
+            .addUserMessage("## 기존 기억\n$existing\n\n## 목표 목록 (따로 관리됨)\n$goalList\n\n## 대화\n$transcript")
             .outputConfig(
                 OutputConfig.builder()
                     .format(

@@ -1,7 +1,11 @@
 package com.samoyed.ai_manager_server.claude
 
+import com.anthropic.client.AnthropicClient
+import com.anthropic.models.messages.Message
+import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.StopReason
 import org.slf4j.LoggerFactory
+import java.time.Duration
 import java.util.UUID
 
 /**
@@ -61,3 +65,44 @@ fun logClaudeCall(call: ClaudeCall) {
     }
     event.log("claude call " + fields.joinToString(" ") { (key, value) -> "$key=${value ?: "-"}" })
 }
+
+/**
+ * 스트리밍이 아닌 Claude 호출 한 번을 타임아웃·재시도 제한과 함께 하고 사용량 로그를 남긴다.
+ * 실패해도 로그(error 종류)를 남기고 예외는 그대로 던진다
+ */
+fun AnthropicClient.createLogged(
+    params: MessageCreateParams,
+    kind: String,
+    id: UUID,
+    model: String,
+    timeout: Duration,
+    maxRetries: Int = 1,
+): Message {
+    val startedAt = System.nanoTime()
+    val message = try {
+        withOptions { it.timeout(timeout).maxRetries(maxRetries) }.messages().create(params)
+    } catch (e: Exception) {
+        logClaudeCall(
+            ClaudeCall(
+                kind = kind, id = id, model = model, stopReason = null,
+                inputTokens = null, outputTokens = null, cacheReadTokens = null, cacheCreationTokens = null,
+                durationMs = elapsedMs(startedAt), error = classifyClaudeError(e),
+            )
+        )
+        throw e
+    }
+    val usage = message.usage()
+    logClaudeCall(
+        ClaudeCall(
+            kind = kind, id = id, model = model, stopReason = message.stopReason().orElse(null),
+            inputTokens = usage.inputTokens(), outputTokens = usage.outputTokens(),
+            cacheReadTokens = usage.cacheReadInputTokens().orElse(null),
+            cacheCreationTokens = usage.cacheCreationInputTokens().orElse(null),
+            durationMs = elapsedMs(startedAt),
+        )
+    )
+    return message
+}
+
+/** 응답의 텍스트 블록만 이어 붙인다 (thinking 등 다른 블록은 건너뛴다) */
+fun Message.text(): String = content().mapNotNull { it.text().orElse(null)?.text() }.joinToString("").trim()

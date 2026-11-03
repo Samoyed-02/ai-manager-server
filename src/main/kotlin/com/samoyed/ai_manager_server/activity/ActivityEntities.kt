@@ -2,6 +2,7 @@ package com.samoyed.ai_manager_server.activity
 
 import jakarta.persistence.*
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -28,6 +29,10 @@ class ActivityLog(
 
     @Column(name = "source_conversation_id")
     val sourceConversationId: UUID? = null,
+
+    /** 연결된 목표. 목표 진행률 계산에 쓴다 */
+    @Column(name = "goal_id")
+    val goalId: UUID? = null,
 ) {
     @Id
     val id: UUID = UUID.randomUUID()
@@ -38,4 +43,8 @@ class ActivityLog(
 
 interface ActivityLogRepository : JpaRepository<ActivityLog, UUID> {
     fun findByOccurredOnBetweenOrderByOccurredOnDescCreatedAtDesc(from: LocalDate, to: LocalDate): List<ActivityLog>
+
+    /** 기간 안에 목표에 연결된 활동 시간(분) 합계 */
+    @Query("select coalesce(sum(a.minutes), 0) from ActivityLog a where a.goalId = :goalId and a.occurredOn between :from and :to")
+    fun sumMinutesForGoal(goalId: UUID, from: LocalDate, to: LocalDate): Long
 }
