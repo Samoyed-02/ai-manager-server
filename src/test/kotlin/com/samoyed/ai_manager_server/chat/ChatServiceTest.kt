@@ -171,6 +171,25 @@ class ChatServiceTest {
     }
 
     @Test
+    fun `답변 도중 대화가 삭제되면 저장하지 않고 오류를 보낸다`() {
+        val prepared = chat.prepare(null, "질문")
+        streams(sequence<RawMessageStreamEvent> {
+            yield(textDelta("답변"))
+            // 스트리밍 중에 사용자가 대화를 지운다
+            conversations.deleteReturningCount(prepared.conversationId)
+            yield(stop(StopReason.END_TURN))
+        }.asStream())
+
+        chat.respond(prepared) { events += it }
+
+        assertAll(
+            { assertFalse(conversations.existsById(prepared.conversationId)) },
+            { assertEquals(emptyList<Pair<String, String>>(), contents(prepared.conversationId)) },
+            { assertEquals(ChatEvent.Error("CONVERSATION_DELETED", "대화가 삭제되어 답변을 저장하지 않았어요"), events.last()) },
+        )
+    }
+
+    @Test
     fun `클라이언트 연결이 끊겨도 응답을 끝까지 받아 저장한다`() {
         val prepared = chat.prepare(null, "질문")
         streams(Stream.of(textDelta("끝까지 "), textDelta("받은 "), textDelta("응답"), stop(StopReason.END_TURN)))

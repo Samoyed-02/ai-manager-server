@@ -59,7 +59,10 @@ class TaskWorker(
     @Scheduled(fixedDelay = 2000)
     fun poll() {
         val claim = claimNext() ?: return
-        val task = tasks.findById(claim.id).orElseThrow()
+        val task = tasks.findById(claim.id).orElse(null) ?: run {
+            log.info("task {} deleted right after claim", claim.id)
+            return
+        }
         log.info("task {} started (attempt {})", claim.id, claim.attempts)
 
         val text = try {
