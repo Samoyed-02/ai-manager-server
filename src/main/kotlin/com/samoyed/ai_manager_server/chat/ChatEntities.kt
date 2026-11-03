@@ -4,11 +4,18 @@ import jakarta.persistence.*
 import java.time.OffsetDateTime
 import java.util.UUID
 
+/** 대화가 어디서 왔는지. VOICE는 통화가 끝난 뒤 클라이언트가 보낸 기록이다 */
+enum class ConversationChannel { CHAT, VOICE }
+
 @Entity
 @Table(name = "conversations")
 class Conversation(
     @Column(length = 200)
     var title: String? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10, updatable = false)
+    val channel: ConversationChannel = ConversationChannel.CHAT,
 ) {
     @Id
     val id: UUID = UUID.randomUUID()
@@ -18,6 +25,13 @@ class Conversation(
 
     @Column(name = "updated_at", nullable = false)
     var updatedAt: OffsetDateTime = OffsetDateTime.now()
+
+    /**
+     * 기억 추출 워커가 JDBC로 쓰는 값이라 JPA에서는 읽기만 한다.
+     * 여기서 쓰게 두면 미리 읽어 둔 엔티티를 저장할 때 워커가 쓴 요약을 덮어쓴다
+     */
+    @Column(columnDefinition = "text", insertable = false, updatable = false)
+    val summary: String? = null
 }
 
 /**
