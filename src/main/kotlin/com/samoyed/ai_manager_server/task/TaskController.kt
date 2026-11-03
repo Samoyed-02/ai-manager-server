@@ -79,6 +79,20 @@ class TaskController(
             .map { DocumentDto(it.id, it.taskId, it.title, it.content, it.createdAt) }
             .orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND) }
 
+    /** 작업의 문서는 남는다 (task_id만 null이 된다) */
+    @DeleteMapping("/tasks/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    fun deleteTask(@PathVariable id: UUID) {
+        if (tasks.deleteReturningCount(id) == 0) throw ResponseStatusException(HttpStatus.NOT_FOUND)
+    }
+
+    /** 작업은 DONE으로 남고 documentId만 null이 된다 */
+    @DeleteMapping("/documents/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    fun deleteDocument(@PathVariable id: UUID) {
+        if (documents.deleteReturningCount(id) == 0) throw ResponseStatusException(HttpStatus.NOT_FOUND)
+    }
+
     private fun Task.toDto(documentId: UUID?) = TaskDto(
         id, type, instruction, status, error, createdAt, finishedAt, documentId,
     )

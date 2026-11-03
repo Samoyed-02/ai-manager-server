@@ -122,6 +122,23 @@ class TaskWorkerStopReasonTest {
     }
 
     @Test
+    fun `처리 중에 작업이 삭제되면 결과를 버리고 문서를 만들지 않는다`() {
+        val id = tasks.save(Task("document", "문서 작성")).id
+        `when`(messages.create(anyArg(MessageCreateParams::class.java))).thenAnswer {
+            // Claude 응답을 기다리는 사이에 사용자가 작업을 지운다
+            tasks.deleteReturningCount(id)
+            claudeResponse()
+        }
+        worker.poll()
+
+        assertAll(
+            { assertFalse(tasks.existsById(id)) },
+            { assertEquals(0, documentCount(id)) },
+            { assertEquals(0, jdbc.sql("select count(*) from documents").query(Int::class.java).single()) },
+        )
+    }
+
+    @Test
     fun `잘려서 실패하는 호출도 사용량 로그를 남긴다`() {
         val (line, fields) = ClaudeCallLogCapture().use { log ->
             val id = runOnce(claudeResponse(stopReason = StopReason.MAX_TOKENS, inputTokens = 3000, outputTokens = 8192))

@@ -151,7 +151,11 @@ class ChatService(
             return
         }
 
-        saveAssistant(prepared.conversationId, text.toString(), status)
+        if (!saveAssistant(prepared.conversationId, text.toString(), status)) {
+            log.info("conversation {} deleted while replying, reply not saved", prepared.conversationId)
+            emit(ChatEvent.Error("CONVERSATION_DELETED", "대화가 삭제되어 답변을 저장하지 않았어요"))
+            return
+        }
         if (failure != null) {
             emit(ChatEvent.Error.of(failure))
         } else {
@@ -171,15 +175,15 @@ class ChatService(
             }
             .build()
 
-    private fun saveAssistant(conversationId: UUID, text: String, status: MessageStatus) {
-        tx.executeWithoutResult {
+    /** 응답 도중 대화가 삭제됐으면 저장하지 않고 false를 돌려준다 */
+    private fun saveAssistant(conversationId: UUID, text: String, status: MessageStatus): Boolean =
+        tx.execute {
+            val conversation = conversations.findForUpdate(conversationId) ?: return@execute false
             messages.save(ChatMessage(conversationId, "assistant", text, status))
-            conversations.findById(conversationId).ifPresent {
-                it.updatedAt = OffsetDateTime.now()
-                conversations.save(it)
-            }
-        }
-    }
+            conversation.updatedAt = OffsetDateTime.now()
+            conversations.save(conversation)
+            true
+        } == true
 
     /** 답을 하나도 받지 못한 질문을 지운다. 이번 요청으로 새로 만든 대화면 대화째 지운다 */
     private fun discardUserMessage(prepared: PreparedChat) {
