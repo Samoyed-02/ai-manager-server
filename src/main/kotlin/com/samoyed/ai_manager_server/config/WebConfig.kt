@@ -19,6 +19,11 @@ class WebConfig(
     @Value("\${app.allowed-origins}") private val origins: String,
     @Value("\${app.passcode}") private val passcode: String,
 ) {
+    init {
+        // 빈 값이면 빈 X-App-Passcode 헤더가 통과해 인증이 꺼진 것과 같다
+        require(passcode.isNotBlank()) { "APP_PASSCODE must not be blank" }
+    }
+
     private val expectedPasscode = passcode.toByteArray(Charsets.UTF_8)
 
     /** 상수 시간 비교. 비교 시간은 입력 길이에만 좌우되어 일치하는 앞부분 길이나 정답 길이가 드러나지 않는다 */
