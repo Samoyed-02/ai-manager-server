@@ -20,6 +20,9 @@ data class ClaudeCall(
     val cacheCreationTokens: Long?,
     val durationMs: Long,
     val historyMessages: Int? = null,
+    val webSearchRequests: Long? = null,
+    val webFetchRequests: Long? = null,
+    val continuations: Int? = null,
     val error: ClaudeErrorKind? = null,
 )
 
@@ -44,6 +47,9 @@ fun logClaudeCall(call: ClaudeCall) {
         add("cache_creation_tokens" to call.cacheCreationTokens)
         add("duration_ms" to call.durationMs)
         if (call.historyMessages != null) add("history_messages" to call.historyMessages)
+        if (call.webSearchRequests != null) add("web_search_requests" to call.webSearchRequests)
+        if (call.webFetchRequests != null) add("web_fetch_requests" to call.webFetchRequests)
+        if (call.continuations != null) add("continuations" to call.continuations)
         add("error" to call.error)
     }
     var event = usageLog.atInfo()
