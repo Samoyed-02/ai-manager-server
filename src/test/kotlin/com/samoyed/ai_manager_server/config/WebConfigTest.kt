@@ -12,6 +12,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.options
+import kotlin.test.assertFailsWith
 
 /** CORS·패스코드 필터까지 포함한 요청 흐름. MockMvc 테스트끼리(ChatControllerTest) 컨텍스트를 공유한다 */
 @SpringBootTest
@@ -69,5 +70,12 @@ class WebConfigTest {
             header("Origin", "http://evil.example")
             header("Access-Control-Request-Method", "GET")
         }.andExpect { status { isForbidden() } }
+    }
+
+    @Test
+    fun `패스코드가 비어 있으면 기동하지 않는다`() {
+        for (blank in listOf("", "   ")) {
+            assertFailsWith<IllegalArgumentException> { WebConfig("http://localhost:3000", blank) }
+        }
     }
 }
