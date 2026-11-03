@@ -11,7 +11,10 @@ import org.springframework.stereotype.Component
 import org.springframework.transaction.support.TransactionTemplate
 import java.time.Duration
 import java.util.UUID
+import com.samoyed.ai_manager_server.claude.ClaudeCall
 import com.samoyed.ai_manager_server.claude.classifyClaudeError
+import com.samoyed.ai_manager_server.claude.elapsedMs
+import com.samoyed.ai_manager_server.claude.logClaudeCall
 import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val MAX_ATTEMPTS = 3
@@ -183,10 +186,33 @@ class TaskWorker(
             .build()
 
         // 채팅과 공유하는 클라이언트라 Task 호출에만 타임아웃/재시도 제한을 건다
-        val message = client
-            .withOptions { it.timeout(CLAUDE_TIMEOUT).maxRetries(CLAUDE_MAX_RETRIES) }
-            .messages()
-            .create(params)
+        val startedAt = System.nanoTime()
+        val message = try {
+            client
+                .withOptions { it.timeout(CLAUDE_TIMEOUT).maxRetries(CLAUDE_MAX_RETRIES) }
+                .messages()
+                .create(params)
+        } catch (e: Exception) {
+            logClaudeCall(
+                ClaudeCall(
+                    kind = "task", id = task.id, model = model, stopReason = null,
+                    inputTokens = null, outputTokens = null, cacheReadTokens = null, cacheCreationTokens = null,
+                    durationMs = elapsedMs(startedAt), error = classifyClaudeError(e),
+                )
+            )
+            throw e
+        }
+        // stop_reason 검사보다 먼저 남겨, 잘림·거절로 실패하는 호출도 기록한다
+        val usage = message.usage()
+        logClaudeCall(
+            ClaudeCall(
+                kind = "task", id = task.id, model = model, stopReason = message.stopReason().orElse(null),
+                inputTokens = usage.inputTokens(), outputTokens = usage.outputTokens(),
+                cacheReadTokens = usage.cacheReadInputTokens().orElse(null),
+                cacheCreationTokens = usage.cacheCreationInputTokens().orElse(null),
+                durationMs = elapsedMs(startedAt),
+            )
+        )
         val text = message.content()
             .mapNotNull { it.text().orElse(null)?.text() }
             .joinToString("")

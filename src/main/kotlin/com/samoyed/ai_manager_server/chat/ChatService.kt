@@ -9,7 +9,10 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.support.TransactionTemplate
 import java.time.OffsetDateTime
 import java.util.UUID
+import com.samoyed.ai_manager_server.claude.ClaudeCall
 import com.samoyed.ai_manager_server.claude.classifyClaudeError
+import com.samoyed.ai_manager_server.claude.elapsedMs
+import com.samoyed.ai_manager_server.claude.logClaudeCall
 import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val SYSTEM_PROMPT = """
@@ -84,24 +87,46 @@ class ChatService(
         val text = StringBuilder()
         var stopReason: StopReason? = null
         var failure: Exception? = null
+        // 입력 토큰은 message_start에, 누적 출력 토큰은 message_delta에 온다
+        var inputTokens: Long? = null
+        var outputTokens: Long? = null
+        var cacheReadTokens: Long? = null
+        var cacheCreationTokens: Long? = null
+        val startedAt = System.nanoTime()
         try {
             client.messages().createStreaming(buildParams(prepared.history)).use { response ->
                 response.stream().forEach { event ->
+                    event.messageStart().ifPresent {
+                        val usage = it.message().usage()
+                        inputTokens = usage.inputTokens()
+                        cacheReadTokens = usage.cacheReadInputTokens().orElse(null)
+                        cacheCreationTokens = usage.cacheCreationInputTokens().orElse(null)
+                    }
                     event.contentBlockDelta()
                         .flatMap { it.delta().text() }
                         .ifPresent { delta ->
                             text.append(delta.text())
                             emit(ChatEvent.Delta(delta.text()))
                         }
-                    event.messageDelta()
-                        .flatMap { it.delta().stopReason() }
-                        .ifPresent { stopReason = it }
+                    event.messageDelta().ifPresent {
+                        it.delta().stopReason().ifPresent { reason -> stopReason = reason }
+                        outputTokens = it.usage().outputTokens()
+                    }
                 }
             }
         } catch (e: Exception) {
             log.error("conversation {} streaming failed", prepared.conversationId, e)
             failure = e
         }
+        logClaudeCall(
+            ClaudeCall(
+                kind = "chat", id = prepared.conversationId, model = model, stopReason = stopReason,
+                inputTokens = inputTokens, outputTokens = outputTokens,
+                cacheReadTokens = cacheReadTokens, cacheCreationTokens = cacheCreationTokens,
+                durationMs = elapsedMs(startedAt), historyMessages = prepared.history.size,
+                error = failure?.let { classifyClaudeError(it) },
+            )
+        )
 
         val status = when {
             failure != null -> MessageStatus.INTERRUPTED

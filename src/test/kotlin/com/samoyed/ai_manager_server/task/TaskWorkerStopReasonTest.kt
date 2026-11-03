@@ -10,8 +10,10 @@ import com.anthropic.models.messages.StopReason
 import com.anthropic.services.blocking.MessageService
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import com.samoyed.ai_manager_server.claude.API_ERROR_BODY
+import com.samoyed.ai_manager_server.claude.ClaudeCallLogCapture
 import com.samoyed.ai_manager_server.claude.ClaudeErrorKind
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -116,6 +118,44 @@ class TaskWorkerStopReasonTest {
         assertAll(
             { assertEquals("PENDING", row.status) },
             { assertEquals(ClaudeErrorKind.RATE_LIMITED.userMessage, row.error) },
+        )
+    }
+
+    @Test
+    fun `잘려서 실패하는 호출도 사용량 로그를 남긴다`() {
+        val (line, fields) = ClaudeCallLogCapture().use { log ->
+            val id = runOnce(claudeResponse(stopReason = StopReason.MAX_TOKENS, inputTokens = 3000, outputTokens = 8192))
+            log.single().also { assertEquals(id.toString(), it.second["id"]) }
+        }
+
+        assertAll(
+            { assertTrue(line.startsWith("claude call kind=task "), line) },
+            { assertTrue(line.contains("stop_reason=max_tokens"), line) },
+            { assertTrue(line.contains("error=-"), line) },
+            { assertEquals("3000", fields["input_tokens"]) },
+            { assertEquals("8192", fields["output_tokens"]) },
+            { assertEquals("claude-sonnet-5-5", fields["model"]) },
+            { assertTrue(fields.containsKey("duration_ms")) },
+            { assertFalse(fields.containsKey("error")) },
+            { assertFalse(fields.containsKey("history_messages")) },
+        )
+    }
+
+    @Test
+    fun `API 오류로 끝난 호출은 오류 종류만 로그에 남긴다`() {
+        val (line, fields) = ClaudeCallLogCapture().use { log ->
+            tasks.save(Task("document", "문서 작성"))
+            `when`(messages.create(anyArg(MessageCreateParams::class.java)))
+                .thenThrow(UnauthorizedException.builder().headers(Headers.builder().build()).body(API_ERROR_BODY).build())
+            worker.poll()
+            log.single()
+        }
+
+        assertAll(
+            { assertTrue(line.contains("error=CONFIG"), line) },
+            { assertTrue(line.contains("stop_reason=- input_tokens=- output_tokens=-"), line) },
+            { assertEquals("CONFIG", fields["error"]) },
+            { assertFalse(fields.containsKey("input_tokens")) },
         )
     }
 

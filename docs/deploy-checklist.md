@@ -21,6 +21,7 @@
 |---|---|---|
 | `PORT` | `8080` | 플랫폼이 포트를 정해 주면 그대로 쓴다 |
 | `JAVA_TOOL_OPTIONS` | 없음 | `-XX:MaxRAMPercentage=75` 권장. 지정하지 않으면 JVM이 컨테이너 메모리의 25%만 힙으로 쓴다 |
+| `LOGGING_STRUCTURED_FORMAT_CONSOLE` | 없음 (텍스트 로그) | `ecs`로 두면 로그가 JSON 한 줄씩 나온다. Claude 사용량 로그(`claude.usage`)의 토큰 수 등이 별도 필드가 되어 로그 서비스에서 바로 집계할 수 있다 |
 
 ## 2. DB
 

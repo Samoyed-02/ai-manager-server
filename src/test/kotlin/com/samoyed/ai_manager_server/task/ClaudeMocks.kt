@@ -15,6 +15,7 @@ import java.util.Optional
 fun claudeResponse(
     text: String = "# 테스트 문서\n본문",
     stopReason: StopReason = StopReason.END_TURN,
+    inputTokens: Long = 100,
     outputTokens: Long = 10,
     refusalCategory: String? = null,
 ): Message {
@@ -23,6 +24,7 @@ fun claudeResponse(
     val block = mock(ContentBlock::class.java)
     `when`(block.text()).thenReturn(Optional.of(textBlock))
     val usage = mock(Usage::class.java)
+    `when`(usage.inputTokens()).thenReturn(inputTokens)
     `when`(usage.outputTokens()).thenReturn(outputTokens)
 
     val message = mock(Message::class.java)
