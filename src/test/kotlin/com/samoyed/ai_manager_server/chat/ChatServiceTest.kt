@@ -10,6 +10,7 @@ import com.anthropic.models.messages.StopReason
 import com.anthropic.services.blocking.MessageService
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import com.samoyed.ai_manager_server.claude.API_ERROR_BODY
+import com.samoyed.ai_manager_server.claude.ClaudeCallLogCapture
 import com.samoyed.ai_manager_server.claude.ClaudeErrorKind
 import com.samoyed.ai_manager_server.task.anyArg
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -129,6 +130,44 @@ class ChatServiceTest {
             { assertEquals(MessageStatus.INTERRUPTED, lastAssistant(prepared.conversationId).status) },
             { assertEquals(ChatEvent.Error("UNKNOWN", ClaudeErrorKind.UNKNOWN.userMessage), events.last()) },
         )
+    }
+
+    @Test
+    fun `정상 응답은 토큰 수와 히스토리 길이를 사용량 로그에 남긴다`() {
+        val prepared = chat.prepare(null, "안녕")
+        streams(Stream.of(messageStart(inputTokens = 1200, cacheReadTokens = 800), textDelta("안녕하세요"), stop(StopReason.END_TURN, outputTokens = 42)))
+
+        val (line, fields) = ClaudeCallLogCapture().use { log ->
+            chat.respond(prepared) { events += it }
+            log.single()
+        }
+
+        assertAll(
+            { assertTrue(line.startsWith("claude call kind=chat id=${prepared.conversationId} "), line) },
+            { assertTrue(line.contains("stop_reason=end_turn input_tokens=1200 output_tokens=42 cache_read_tokens=800"), line) },
+            { assertTrue(line.contains("history_messages=1 error=-"), line) },
+            { assertEquals("1200", fields["input_tokens"]) },
+            { assertEquals("42", fields["output_tokens"]) },
+            { assertEquals("800", fields["cache_read_tokens"]) },
+            { assertFalse(fields.containsKey("cache_creation_tokens")) },
+        )
+    }
+
+    @Test
+    fun `스트리밍 도중 실패해도 받은 만큼 사용량 로그를 남긴다`() {
+        val prepared = chat.prepare(null, "질문")
+        streams(sequence<RawMessageStreamEvent> {
+            yield(messageStart(inputTokens = 500))
+            yield(textDelta("부분"))
+            throw IllegalStateException("스트림 끊김")
+        }.asStream())
+
+        val (line, _) = ClaudeCallLogCapture().use { log ->
+            chat.respond(prepared) { events += it }
+            log.single()
+        }
+
+        assertTrue(line.contains("stop_reason=- input_tokens=500 output_tokens=-") && line.contains("error=UNKNOWN"), line)
     }
 
     @Test
