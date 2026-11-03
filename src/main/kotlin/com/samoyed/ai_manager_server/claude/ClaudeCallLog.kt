@@ -23,6 +23,7 @@ data class ClaudeCall(
     val webSearchRequests: Long? = null,
     val webFetchRequests: Long? = null,
     val continuations: Int? = null,
+    val toolCalls: Int? = null,
     val error: ClaudeErrorKind? = null,
 )
 
@@ -50,6 +51,7 @@ fun logClaudeCall(call: ClaudeCall) {
         if (call.webSearchRequests != null) add("web_search_requests" to call.webSearchRequests)
         if (call.webFetchRequests != null) add("web_fetch_requests" to call.webFetchRequests)
         if (call.continuations != null) add("continuations" to call.continuations)
+        if (call.toolCalls != null) add("tool_calls" to call.toolCalls)
         add("error" to call.error)
     }
     var event = usageLog.atInfo()

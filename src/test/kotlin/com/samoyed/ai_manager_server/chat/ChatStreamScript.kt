@@ -61,6 +61,17 @@ class ChatStreamScript {
         add("""{"type":"content_block_stop","index":$i}""")
     }
 
+    /** 우리 서버가 실행할 도구 호출(tool_use). input은 JSON으로 바꿔 input_json_delta로 보낸다. 블록 id를 돌려준다 */
+    fun toolUse(name: String, input: Map<String, Any?>): String {
+        val id = "toolu_${toolId++}"
+        val i = index++
+        val partialJson = jsonMapper().writeValueAsString(jsonMapper().writeValueAsString(input))
+        add("""{"type":"content_block_start","index":$i,"content_block":{"type":"tool_use","id":"$id","name":"$name","input":{}}}""")
+        add("""{"type":"content_block_delta","index":$i,"delta":{"type":"input_json_delta","partial_json":$partialJson}}""")
+        add("""{"type":"content_block_stop","index":$i}""")
+        return id
+    }
+
     fun end(stopReason: String, outputTokens: Long = 10, searches: Long = 0, fetches: Long = 0) {
         add(
             """{"type":"message_delta","delta":{"stop_reason":"$stopReason","stop_sequence":null},
