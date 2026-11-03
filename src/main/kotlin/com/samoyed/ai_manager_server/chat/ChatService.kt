@@ -1,8 +1,14 @@
 package com.samoyed.ai_manager_server.chat
 
 import com.anthropic.client.AnthropicClient
+import com.anthropic.helpers.MessageAccumulator
+import com.anthropic.models.messages.Message
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.StopReason
+import com.anthropic.models.messages.ToolUnion
+import com.anthropic.models.messages.UserLocation
+import com.anthropic.models.messages.WebFetchTool20260209
+import com.anthropic.models.messages.WebSearchTool20260209
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
@@ -18,7 +24,36 @@ import com.samoyed.ai_manager_server.profile.ContextService
 private const val SYSTEM_PROMPT = """
 너는 사용자의 개인 AI 매니저야. 아래 사용자 프로필을 참고해서 맞춤형으로 답해.
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
+최신 정보나 사실 확인이 필요할 때만 웹 검색을 쓰고, 일반 지식이나 대화 내용만으로 답할 수 있으면 검색하지 마.
+출처 목록은 서버가 답변 끝에 붙이니 직접 쓰지 마.
 """
+
+/** 질문 하나에 쓸 수 있는 웹 검색·페이지 읽기 횟수. 검색은 1,000회당 $10 */
+private const val MAX_WEB_SEARCHES = 3L
+private const val MAX_WEB_FETCHES = 3L
+/** 페이지 하나를 읽을 때 컨텍스트에 넣을 최대 토큰. 큰 문서가 입력 토큰을 크게 늘리지 않게 한다 */
+private const val MAX_FETCH_CONTENT_TOKENS = 20_000L
+/** 서버 쪽 도구 반복이 한도에 걸려 pause_turn으로 끝나면 이어 받는 최대 횟수 */
+private const val MAX_CONTINUATIONS = 3
+private const val MAX_SOURCES = 10
+
+private val WEB_TOOLS = listOf(
+    ToolUnion.ofWebSearchTool20260209(
+        WebSearchTool20260209.builder()
+            .maxUses(MAX_WEB_SEARCHES)
+            .userLocation(UserLocation.builder().country("KR").timezone("Asia/Seoul").build())
+            .build()
+    ),
+    ToolUnion.ofWebFetchTool20260209(
+        WebFetchTool20260209.builder()
+            .maxUses(MAX_WEB_FETCHES)
+            .maxContentTokens(MAX_FETCH_CONTENT_TOKENS)
+            .build()
+    ),
+)
+
+/** 웹 검색 인용이나 읽은 페이지. 사용자에게 보여줄 때 출처를 함께 표시해야 한다 */
+private data class Source(val url: String, val title: String?)
 
 /** prepare()가 저장한 상태. 응답이 실패하면 이 정보로 사용자 메시지를 되돌린다 */
 data class PreparedChat(
@@ -85,34 +120,26 @@ class ChatService(
         emit(ChatEvent.Meta(prepared.conversationId))
 
         val text = StringBuilder()
+        val sources = LinkedHashMap<String, Source>()
         var stopReason: StopReason? = null
         var failure: Exception? = null
-        // 입력 토큰은 message_start에, 누적 출력 토큰은 message_delta에 온다
-        var inputTokens: Long? = null
-        var outputTokens: Long? = null
-        var cacheReadTokens: Long? = null
-        var cacheCreationTokens: Long? = null
+        // 토큰·도구 사용량은 요청마다 받아 합친다. pause_turn으로 이어 받으면 요청이 여러 번이 된다
+        val usage = UsageTotals()
+        var continuations = 0
+        var params = buildParams(prepared.history)
         val startedAt = System.nanoTime()
         try {
-            client.messages().createStreaming(buildParams(prepared.history)).use { response ->
-                response.stream().forEach { event ->
-                    event.messageStart().ifPresent {
-                        val usage = it.message().usage()
-                        inputTokens = usage.inputTokens()
-                        cacheReadTokens = usage.cacheReadInputTokens().orElse(null)
-                        cacheCreationTokens = usage.cacheCreationInputTokens().orElse(null)
-                    }
-                    event.contentBlockDelta()
-                        .flatMap { it.delta().text() }
-                        .ifPresent { delta ->
-                            text.append(delta.text())
-                            emit(ChatEvent.Delta(delta.text()))
-                        }
-                    event.messageDelta().ifPresent {
-                        it.delta().stopReason().ifPresent { reason -> stopReason = reason }
-                        outputTokens = it.usage().outputTokens()
-                    }
+            while (true) {
+                val result = streamOnce(params, usage, sources, prepared.conversationId) { delta ->
+                    text.append(delta)
+                    emit(ChatEvent.Delta(delta))
                 }
+                stopReason = result.stopReason
+                // 서버 쪽 도구 반복이 한도에 걸린 경우. 받은 응답을 그대로 붙여 보내면 이어서 진행한다
+                if (stopReason != StopReason.PAUSE_TURN || continuations >= MAX_CONTINUATIONS) break
+                val message = result.message ?: break
+                params = params.toBuilder().addMessage(message).build()
+                continuations++
             }
         } catch (e: Exception) {
             log.error("conversation {} streaming failed", prepared.conversationId, e)
@@ -121,16 +148,26 @@ class ChatService(
         logClaudeCall(
             ClaudeCall(
                 kind = "chat", id = prepared.conversationId, model = model, stopReason = stopReason,
-                inputTokens = inputTokens, outputTokens = outputTokens,
-                cacheReadTokens = cacheReadTokens, cacheCreationTokens = cacheCreationTokens,
+                inputTokens = usage.inputTokens, outputTokens = usage.outputTokens,
+                cacheReadTokens = usage.cacheReadTokens, cacheCreationTokens = usage.cacheCreationTokens,
                 durationMs = elapsedMs(startedAt), historyMessages = prepared.history.size,
+                webSearchRequests = usage.webSearchRequests, webFetchRequests = usage.webFetchRequests,
+                continuations = continuations,
                 error = failure?.let { classifyClaudeError(it) },
             )
         )
 
+        if (text.isNotBlank() && sources.isNotEmpty()) {
+            val footer = sourcesFooter(sources.values)
+            text.append(footer)
+            emit(ChatEvent.Delta(footer))
+        }
+
         val status = when {
             failure != null -> MessageStatus.INTERRUPTED
             stopReason == StopReason.MAX_TOKENS -> MessageStatus.TRUNCATED
+            // 이어 받기 한도를 넘겨 끝까지 받지 못했다
+            stopReason == StopReason.PAUSE_TURN -> MessageStatus.TRUNCATED
             stopReason == StopReason.REFUSAL -> MessageStatus.REFUSED
             stopReason == StopReason.END_TURN || stopReason == StopReason.STOP_SEQUENCE -> MessageStatus.COMPLETE
             else -> MessageStatus.INTERRUPTED
@@ -163,11 +200,108 @@ class ChatService(
         }
     }
 
+    private class UsageTotals {
+        var inputTokens: Long? = null
+        var outputTokens: Long? = null
+        var cacheReadTokens: Long? = null
+        var cacheCreationTokens: Long? = null
+        var webSearchRequests: Long? = null
+        var webFetchRequests: Long? = null
+    }
+
+    private class StreamResult(val stopReason: StopReason?, val message: Message?)
+
+    private fun Long?.plus(n: Long?): Long? = if (this == null && n == null) null else (this ?: 0) + (n ?: 0)
+
+    /**
+     * 요청 한 번을 스트리밍한다. 텍스트 조각은 onText로 넘기고, 출처와 사용량을 모은다.
+     * pause_turn이면 이어 보내야 하므로 응답 전체를 MessageAccumulator로 모아 돌려준다.
+     */
+    private fun streamOnce(
+        params: MessageCreateParams,
+        usage: UsageTotals,
+        sources: MutableMap<String, Source>,
+        conversationId: UUID,
+        onText: (String) -> Unit,
+    ): StreamResult {
+        val accumulator = MessageAccumulator.create()
+        var accumulating = true
+        var stopReason: StopReason? = null
+        // 입력 토큰은 message_start에, 출력 토큰·도구 사용 횟수는 message_delta에 누적값으로 온다
+        var input: Long? = null
+        var cacheRead: Long? = null
+        var cacheCreation: Long? = null
+        var output: Long? = null
+        var searches: Long? = null
+        var fetches: Long? = null
+        try {
+            client.messages().createStreaming(params).use { response ->
+                response.stream().forEach { event ->
+                    // 모으기에 실패해도 답변은 계속 받는다. 이어 받기만 못 하게 된다
+                    if (accumulating) {
+                        try {
+                            accumulator.accumulate(event)
+                        } catch (e: Exception) {
+                            accumulating = false
+                            log.warn("conversation {} could not accumulate stream, pause_turn continuation disabled: {}", conversationId, e.toString())
+                        }
+                    }
+                    event.messageStart().ifPresent {
+                        val u = it.message().usage()
+                        input = u.inputTokens()
+                        cacheRead = u.cacheReadInputTokens().orElse(null)
+                        cacheCreation = u.cacheCreationInputTokens().orElse(null)
+                    }
+                    event.contentBlockStart()
+                        .flatMap { it.contentBlock().webFetchToolResult() }
+                        .flatMap { it.content().webFetchBlock() }
+                        .ifPresent { sources.putIfAbsent(it.url(), Source(it.url(), it.content().title().orElse(null))) }
+                    event.contentBlockDelta().ifPresent { blockDelta ->
+                        blockDelta.delta().text().ifPresent { onText(it.text()) }
+                        blockDelta.delta().citations()
+                            .flatMap { it.citation().webSearchResultLocation() }
+                            .ifPresent { sources.putIfAbsent(it.url(), Source(it.url(), it.title().orElse(null))) }
+                    }
+                    event.messageDelta().ifPresent {
+                        it.delta().stopReason().ifPresent { reason -> stopReason = reason }
+                        output = it.usage().outputTokens()
+                        it.usage().serverToolUse().ifPresent { tools ->
+                            searches = tools.webSearchRequests()
+                            fetches = tools.webFetchRequests()
+                        }
+                    }
+                }
+            }
+        } finally {
+            usage.inputTokens = usage.inputTokens.plus(input)
+            usage.cacheReadTokens = usage.cacheReadTokens.plus(cacheRead)
+            usage.cacheCreationTokens = usage.cacheCreationTokens.plus(cacheCreation)
+            usage.outputTokens = usage.outputTokens.plus(output)
+            usage.webSearchRequests = usage.webSearchRequests.plus(searches)
+            usage.webFetchRequests = usage.webFetchRequests.plus(fetches)
+        }
+        val message = if (stopReason == StopReason.PAUSE_TURN && accumulating) {
+            runCatching { accumulator.message() }
+                .onFailure { log.warn("conversation {} paused reply could not be rebuilt: {}", conversationId, it.toString()) }
+                .getOrNull()
+        } else null
+        return StreamResult(stopReason, message)
+    }
+
+    /** 답변 끝에 붙이는 출처 목록. 웹 검색 결과를 보여줄 때는 출처를 함께 표시해야 한다 */
+    private fun sourcesFooter(sources: Collection<Source>): String =
+        sources.take(MAX_SOURCES).joinToString("\n", prefix = "\n\n**출처**\n") { source ->
+            val title = (source.title?.takeIf { it.isNotBlank() } ?: source.url)
+                .replace("[", "(").replace("]", ")")
+            "- [$title](${source.url})"
+        }
+
     private fun buildParams(history: List<ChatMessage>): MessageCreateParams =
         MessageCreateParams.builder()
             .model(model)
             .maxTokens(4096)
             .system(SYSTEM_PROMPT.trimIndent() + "\n\n" + context.forClaude())
+            .tools(WEB_TOOLS)
             .apply {
                 history.forEach {
                     if (it.role == "user") addUserMessage(it.content) else addAssistantMessage(it.content)
