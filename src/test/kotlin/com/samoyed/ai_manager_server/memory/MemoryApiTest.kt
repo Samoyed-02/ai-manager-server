@@ -1,6 +1,7 @@
 package com.samoyed.ai_manager_server.memory
 
 import com.anthropic.client.AnthropicClient
+import com.samoyed.ai_manager_server.TestAuth
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
@@ -29,6 +30,7 @@ class MemoryApiTest {
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var mvc: MockMvc
+    @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var memories: MemoryRepository
     @Autowired lateinit var jdbc: JdbcClient
 
@@ -46,8 +48,8 @@ class MemoryApiTest {
         }
         post("""{"category":"ROUTINE","content":"매일 아침 7시 기상"}""").andExpect { status { isCreated() } }
 
-        mvc.get("/memories") { header(HEADER, PASSCODE) }.andExpect { jsonPath("$.length()") { value(2) } }
-        mvc.get("/memories?category=GOAL") { header(HEADER, PASSCODE) }.andExpect {
+        mvc.get("/memories") { header("Authorization", testAuth.bearer) }.andExpect { jsonPath("$.length()") { value(2) } }
+        mvc.get("/memories?category=GOAL") { header("Authorization", testAuth.bearer) }.andExpect {
             jsonPath("$.length()") { value(1) }
             jsonPath("$[0].content") { value("정보처리기사 합격") }
         }
@@ -58,7 +60,7 @@ class MemoryApiTest {
         val memory = memories.save(Memory(MemoryCategory.GOAL, "토익 800점"))
 
         mvc.put("/memories/${memory.id}") {
-            header(HEADER, PASSCODE)
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"category":"PROGRESS","content":"토익 850점 달성"}"""
         }.andExpect {
@@ -67,8 +69,8 @@ class MemoryApiTest {
         }
         assertEquals(MemoryCategory.PROGRESS, memories.findById(memory.id).get().category)
 
-        mvc.delete("/memories/${memory.id}") { header(HEADER, PASSCODE) }.andExpect { status { isNoContent() } }
-        mvc.delete("/memories/${memory.id}") { header(HEADER, PASSCODE) }.andExpect { status { isNotFound() } }
+        mvc.delete("/memories/${memory.id}") { header("Authorization", testAuth.bearer) }.andExpect { status { isNoContent() } }
+        mvc.delete("/memories/${memory.id}") { header("Authorization", testAuth.bearer) }.andExpect { status { isNotFound() } }
     }
 
     @Test
@@ -96,13 +98,9 @@ class MemoryApiTest {
     }
 
     private fun post(body: String) = mvc.post("/memories") {
-        header(HEADER, PASSCODE)
+        header("Authorization", testAuth.bearer)
         contentType = MediaType.APPLICATION_JSON
         content = body
     }
 
-    private companion object {
-        const val HEADER = "X-App-Passcode"
-        const val PASSCODE = "test-passcode"
-    }
 }

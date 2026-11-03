@@ -40,6 +40,13 @@ dependencies {
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
 	implementation("com.anthropic:anthropic-java:2.60.0")
+	// 비밀번호 해시(bcrypt)만 쓴다. Spring Security 전체는 넣지 않는다
+	implementation("org.springframework.security:spring-security-crypto")
+}
+
+// AuthSetup(배포 준비 CLI)에도 main이 있어 앱 진입점을 정해 둔다
+springBoot {
+	mainClass.set("com.samoyed.ai_manager_server.AiManagerServerApplicationKt")
 }
 
 kotlin {
@@ -56,4 +63,24 @@ allOpen {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
+}
+
+// 배포 준비용. 비밀번호는 표준 입력으로 받아 셸 기록에 남지 않게 한다
+// 사용: ./gradlew -q hashPassword --console=plain   (입력 후 Enter)
+tasks.register<JavaExec>("hashPassword") {
+	group = "auth"
+	description = "Prints a bcrypt hash for APP_PASSWORD_HASH"
+	classpath = sourceSets["main"].runtimeClasspath
+	mainClass.set("com.samoyed.ai_manager_server.auth.AuthSetupKt")
+	args("hash-password")
+	standardInput = System.`in`
+}
+
+// 사용: ./gradlew -q totpSecret --console=plain
+tasks.register<JavaExec>("totpSecret") {
+	group = "auth"
+	description = "Prints a new APP_TOTP_SECRET and its otpauth:// URI for an authenticator app"
+	classpath = sourceSets["main"].runtimeClasspath
+	mainClass.set("com.samoyed.ai_manager_server.auth.AuthSetupKt")
+	args("totp-secret")
 }

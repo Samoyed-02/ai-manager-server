@@ -37,6 +37,7 @@ class DeleteApiTest {
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var mvc: MockMvc
+    @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var conversations: ConversationRepository
     @Autowired lateinit var messages: ChatMessageRepository
     @Autowired lateinit var tasks: TaskRepository
@@ -72,9 +73,9 @@ class DeleteApiTest {
 
         delete("/tasks/${task.id}").andExpect { status { isNoContent() } }
 
-        mvc.get("/tasks/${task.id}") { header(PASSCODE_HEADER, PASSCODE) }
+        mvc.get("/tasks/${task.id}") { header("Authorization", testAuth.bearer) }
             .andExpect { status { isNotFound() } }
-        mvc.get("/documents/${document.id}") { header(PASSCODE_HEADER, PASSCODE) }.andExpect {
+        mvc.get("/documents/${document.id}") { header("Authorization", testAuth.bearer) }.andExpect {
             status { isOk() }
             jsonPath("$.title") { value("문서") }
             jsonPath("$.taskId") { value(null) }
@@ -89,7 +90,7 @@ class DeleteApiTest {
 
         delete("/documents/${document.id}").andExpect { status { isNoContent() } }
 
-        mvc.get("/tasks/${task.id}") { header(PASSCODE_HEADER, PASSCODE) }.andExpect {
+        mvc.get("/tasks/${task.id}") { header("Authorization", testAuth.bearer) }.andExpect {
             status { isOk() }
             jsonPath("$.status") { value("DONE") }
             jsonPath("$.documentId") { value(null) }
@@ -110,10 +111,6 @@ class DeleteApiTest {
     private fun doneTask(): Task =
         tasks.save(Task("document", "문서 작성").apply { status = TaskStatus.DONE })
 
-    private fun delete(path: String) = mvc.delete(path) { header(PASSCODE_HEADER, PASSCODE) }
+    private fun delete(path: String) = mvc.delete(path) { header("Authorization", testAuth.bearer) }
 
-    private companion object {
-        const val PASSCODE_HEADER = "X-App-Passcode"
-        const val PASSCODE = "test-passcode"
-    }
 }

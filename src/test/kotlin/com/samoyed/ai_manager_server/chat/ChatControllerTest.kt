@@ -3,6 +3,7 @@ package com.samoyed.ai_manager_server.chat
 import com.anthropic.client.AnthropicClient
 import com.anthropic.models.messages.StopReason
 import com.anthropic.services.blocking.MessageService
+import com.samoyed.ai_manager_server.TestAuth
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -32,6 +33,7 @@ class ChatControllerTest {
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var mvc: MockMvc
+    @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var jdbc: JdbcClient
 
     private val messageService: MessageService = mock(MessageService::class.java)
@@ -47,7 +49,7 @@ class ChatControllerTest {
         messageService.streams(Stream.of(textDelta("안녕"), textDelta("하세요"), stop(StopReason.END_TURN)))
 
         val result = mvc.post("/chat") {
-            header("X-App-Passcode", "test-passcode")
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"message":"인사해줘"}"""
         }.andExpect { request { asyncStarted() } }.andReturn()
@@ -74,7 +76,7 @@ class ChatControllerTest {
         )
 
         val result = mvc.post("/chat") {
-            header("X-App-Passcode", "test-passcode")
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"message":"보고서 맡겨줘"}"""
         }.andExpect { request { asyncStarted() } }.andReturn()

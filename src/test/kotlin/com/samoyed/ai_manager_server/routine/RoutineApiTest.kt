@@ -1,6 +1,7 @@
 package com.samoyed.ai_manager_server.routine
 
 import com.anthropic.client.AnthropicClient
+import com.samoyed.ai_manager_server.TestAuth
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import com.samoyed.ai_manager_server.activity.ActivityCategory
 import com.samoyed.ai_manager_server.activity.ActivityLog
@@ -35,6 +36,7 @@ class RoutineApiTest {
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var mvc: MockMvc
+    @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var routines: RoutineRepository
     @Autowired lateinit var notifications: NotificationRepository
     @Autowired lateinit var activities: ActivityLogRepository
@@ -48,7 +50,7 @@ class RoutineApiTest {
     @Test
     fun `루틴을 만들고 고치고 지운다`() {
         mvc.post("/routines") {
-            header(HEADER, PASSCODE)
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"title":"아침 브리핑","kind":"BRIEFING","message":"오늘 할 일","time":"08:00","days":["MON","FRI"]}"""
         }.andExpect {
@@ -59,7 +61,7 @@ class RoutineApiTest {
         val id = routines.findAll().single().id
 
         mvc.put("/routines/$id") {
-            header(HEADER, PASSCODE)
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"enabled":false,"time":"7:30"}"""
         }.andExpect {
@@ -67,9 +69,9 @@ class RoutineApiTest {
             jsonPath("$.enabled") { value(false) }
             jsonPath("$.time") { value("07:30") }
         }
-        mvc.get("/routines") { header(HEADER, PASSCODE) }.andExpect { jsonPath("$[0].title") { value("아침 브리핑") } }
-        mvc.delete("/routines/$id") { header(HEADER, PASSCODE) }.andExpect { status { isNoContent() } }
-        mvc.delete("/routines/$id") { header(HEADER, PASSCODE) }.andExpect { status { isNotFound() } }
+        mvc.get("/routines") { header("Authorization", testAuth.bearer) }.andExpect { jsonPath("$[0].title") { value("아침 브리핑") } }
+        mvc.delete("/routines/$id") { header("Authorization", testAuth.bearer) }.andExpect { status { isNoContent() } }
+        mvc.delete("/routines/$id") { header("Authorization", testAuth.bearer) }.andExpect { status { isNotFound() } }
     }
 
     @Test
@@ -80,7 +82,7 @@ class RoutineApiTest {
             """{"title":"x","kind":"REMINDER"}""",
         ).forEach { body ->
             mvc.post("/routines") {
-                header(HEADER, PASSCODE)
+                header("Authorization", testAuth.bearer)
                 contentType = MediaType.APPLICATION_JSON
                 content = body
             }.andExpect { status { isBadRequest() } }
@@ -93,13 +95,13 @@ class RoutineApiTest {
         val first = notifications.save(Notification(null, "알림 1", "내용 1"))
         notifications.save(Notification(null, "알림 2", "내용 2"))
 
-        mvc.post("/notifications/${first.id}/read") { header(HEADER, PASSCODE) }.andExpect { status { isNoContent() } }
+        mvc.post("/notifications/${first.id}/read") { header("Authorization", testAuth.bearer) }.andExpect { status { isNoContent() } }
 
-        mvc.get("/notifications?unread=true") { header(HEADER, PASSCODE) }.andExpect {
+        mvc.get("/notifications?unread=true") { header("Authorization", testAuth.bearer) }.andExpect {
             jsonPath("$.length()") { value(1) }
             jsonPath("$[0].title") { value("알림 2") }
         }
-        mvc.get("/notifications") { header(HEADER, PASSCODE) }.andExpect { jsonPath("$.length()") { value(2) } }
+        mvc.get("/notifications") { header("Authorization", testAuth.bearer) }.andExpect { jsonPath("$.length()") { value(2) } }
         assertTrue(notifications.findById(first.id).get().readAt != null)
     }
 
@@ -109,17 +111,13 @@ class RoutineApiTest {
         val recent = activities.save(ActivityLog(ActivityCategory.STUDY, "알고리즘", 120, today))
         activities.save(ActivityLog(ActivityCategory.EXERCISE, "오래전 운동", 60, today.minusDays(10)))
 
-        mvc.get("/activities") { header(HEADER, PASSCODE) }.andExpect {
+        mvc.get("/activities") { header("Authorization", testAuth.bearer) }.andExpect {
             jsonPath("$.length()") { value(1) }
             jsonPath("$[0].description") { value("알고리즘") }
         }
-        mvc.get("/activities?from=${today.minusDays(30)}&to=$today") { header(HEADER, PASSCODE) }.andExpect { jsonPath("$.length()") { value(2) } }
-        mvc.delete("/activities/${recent.id}") { header(HEADER, PASSCODE) }.andExpect { status { isNoContent() } }
+        mvc.get("/activities?from=${today.minusDays(30)}&to=$today") { header("Authorization", testAuth.bearer) }.andExpect { jsonPath("$.length()") { value(2) } }
+        mvc.delete("/activities/${recent.id}") { header("Authorization", testAuth.bearer) }.andExpect { status { isNoContent() } }
         assertFalse(activities.existsById(recent.id))
     }
 
-    private companion object {
-        const val HEADER = "X-App-Passcode"
-        const val PASSCODE = "test-passcode"
-    }
 }

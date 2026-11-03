@@ -1,6 +1,7 @@
 package com.samoyed.ai_manager_server.goal
 
 import com.anthropic.client.AnthropicClient
+import com.samoyed.ai_manager_server.TestAuth
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import com.samoyed.ai_manager_server.activity.ActivityCategory
 import com.samoyed.ai_manager_server.activity.ActivityLogRepository
@@ -31,6 +32,7 @@ class GoalApiTest {
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var mvc: MockMvc
+    @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var goals: GoalRepository
     @Autowired lateinit var activities: ActivityLogRepository
     @Autowired lateinit var service: GoalService
@@ -58,7 +60,7 @@ class GoalApiTest {
         call("list_goals", "{}").andExpect {
             jsonPath("$.result") { value(org.hamcrest.Matchers.containsString("이번 주 2시간 / 목표 10시간")) }
         }
-        mvc.get("/goals") { header(HEADER, PASSCODE) }.andExpect {
+        mvc.get("/goals") { header("Authorization", testAuth.bearer) }.andExpect {
             jsonPath("$[0].thisWeekMinutes") { value(120) }
             jsonPath("$[0].weeklyTargetMinutes") { value(600) }
         }
@@ -89,7 +91,7 @@ class GoalApiTest {
         }
         // 끝난 목표를 다시 진행 중으로 돌리는 것도 한도를 지킨다
         mvc.put("/goals/${goal.id}") {
-            header(HEADER, PASSCODE)
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"status":"ACTIVE"}"""
         }.andExpect { status { isBadRequest() } }
@@ -98,7 +100,7 @@ class GoalApiTest {
     @Test
     fun `화면에서 목표를 만들고 잘못된 값은 400`() {
         mvc.post("/goals") {
-            header(HEADER, PASSCODE)
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"title":"헬스 주 3회","category":"EXERCISE","weeklyTargetMinutes":180}"""
         }.andExpect {
@@ -106,25 +108,21 @@ class GoalApiTest {
             jsonPath("$.progress") { value("헬스 주 3회: 이번 주 0분 / 목표 3시간") }
         }
         mvc.post("/goals") {
-            header(HEADER, PASSCODE)
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"title":"x","category":"EXERCISE","weeklyTargetMinutes":0}"""
         }.andExpect { status { isBadRequest() } }
         mvc.post("/goals") {
-            header(HEADER, PASSCODE)
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"category":"EXERCISE"}"""
         }.andExpect { status { isBadRequest() } }
     }
 
     private fun call(name: String, args: String): ResultActionsDsl = mvc.post("/tools/$name") {
-        header(HEADER, PASSCODE)
+        header("Authorization", testAuth.bearer)
         contentType = MediaType.APPLICATION_JSON
         content = """{"args":$args}"""
     }
 
-    private companion object {
-        const val HEADER = "X-App-Passcode"
-        const val PASSCODE = "test-passcode"
-    }
 }
