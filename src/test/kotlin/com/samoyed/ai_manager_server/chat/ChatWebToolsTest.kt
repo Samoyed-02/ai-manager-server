@@ -52,7 +52,8 @@ class ChatWebToolsTest {
         val search = tools.single { it.isWebSearchTool20260209() }.asWebSearchTool20260209()
         val fetch = tools.single { it.isWebFetchTool20260209() }.asWebFetchTool20260209()
         assertAll(
-            { assertEquals(2, tools.size) },
+            // 웹 도구 2개 + create_task
+            { assertEquals(3, tools.size) },
             { assertEquals(3L, search.maxUses().get()) },
             { assertEquals("KR", search.userLocation().get().country().get()) },
             { assertEquals(3L, fetch.maxUses().get()) },

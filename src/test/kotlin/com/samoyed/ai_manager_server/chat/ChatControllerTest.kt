@@ -65,4 +65,25 @@ class ChatControllerTest {
             { assertTrue(body.contains("""{"status":"COMPLETE"}"""), body) },
         )
     }
+
+    @Test
+    fun `create_task로 작업을 만들면 task 이벤트가 간다`() {
+        messageService.streamsInOrder(
+            chatStream { start(); toolUse("create_task", mapOf("instruction" to "보고서 초안")); end("tool_use") },
+            chatStream { start(); text("맡겼어요."); end("end_turn") },
+        )
+
+        val result = mvc.post("/chat") {
+            header("X-App-Passcode", "test-passcode")
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"message":"보고서 맡겨줘"}"""
+        }.andExpect { request { asyncStarted() } }.andReturn()
+        result.getAsyncResult(10_000)
+        val body = result.response.getContentAsString(Charsets.UTF_8)
+
+        assertAll(
+            { assertTrue(body.indexOf("event:task") in 0 until body.indexOf("event:done"), body) },
+            { assertTrue(Regex(""""taskId":"[0-9a-f-]{36}","instruction":"보고서 초안"""").containsMatchIn(body), body) },
+        )
+    }
 }

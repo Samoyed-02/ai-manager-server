@@ -145,7 +145,7 @@ class ChatServiceTest {
         assertAll(
             { assertTrue(line.startsWith("claude call kind=chat id=${prepared.conversationId} "), line) },
             { assertTrue(line.contains("stop_reason=end_turn input_tokens=1200 output_tokens=42 cache_read_tokens=800"), line) },
-            { assertTrue(line.contains("history_messages=1 continuations=0 error=-"), line) },
+            { assertTrue(line.contains("history_messages=1 continuations=0 tool_calls=0 error=-"), line) },
             { assertEquals("1200", fields["input_tokens"]) },
             { assertEquals("42", fields["output_tokens"]) },
             { assertEquals("800", fields["cache_read_tokens"]) },

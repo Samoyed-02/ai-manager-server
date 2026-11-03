@@ -26,6 +26,7 @@ private const val SYSTEM_PROMPT = """
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
 최신 정보나 사실 확인이 필요할 때만 웹 검색을 쓰고, 일반 지식이나 대화 내용만으로 답할 수 있으면 검색하지 마.
 출처 목록은 서버가 답변 끝에 붙이니 직접 쓰지 마.
+긴 문서를 써 달라는 분명한 요청이면 create_task 도구로 작성자에게 맡기고, 맡겼다고 짧게 알려 줘.
 """
 
 /** 질문 하나에 쓸 수 있는 웹 검색·페이지 읽기 횟수. 검색은 1,000회당 $10 */
@@ -35,6 +36,8 @@ private const val MAX_WEB_FETCHES = 3L
 private const val MAX_FETCH_CONTENT_TOKENS = 20_000L
 /** 서버 쪽 도구 반복이 한도에 걸려 pause_turn으로 끝나면 이어 받는 최대 횟수 */
 private const val MAX_CONTINUATIONS = 3
+/** 우리 서버가 실행하는 도구(create_task)의 결과를 돌려주고 이어 받는 최대 횟수 */
+private const val MAX_TOOL_ROUNDS = 2
 private const val MAX_SOURCES = 10
 
 private val WEB_TOOLS = listOf(
@@ -68,6 +71,8 @@ sealed interface ChatEvent {
     data class Meta(val conversationId: UUID) : ChatEvent
     data class Delta(val text: String) : ChatEvent
     data class Done(val status: MessageStatus) : ChatEvent
+    /** create_task 도구로 작업을 만들었다 */
+    data class TaskCreated(val taskId: UUID, val instruction: String) : ChatEvent
     /** code: ClaudeErrorKind 이름 또는 REFUSED / EMPTY_RESPONSE. message는 사용자에게 보여줄 문구 */
     data class Error(val code: String, val message: String) : ChatEvent {
         companion object {
@@ -83,6 +88,7 @@ class ChatService(
     private val messages: ChatMessageRepository,
     private val context: ContextService,
     private val tx: TransactionTemplate,
+    private val createTask: CreateTaskTool,
     @Value("\${claude.model}") private val model: String,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -126,6 +132,9 @@ class ChatService(
         // 토큰·도구 사용량은 요청마다 받아 합친다. pause_turn으로 이어 받으면 요청이 여러 번이 된다
         val usage = UsageTotals()
         var continuations = 0
+        var toolRounds = 0
+        var toolCalls = 0
+        var taskCreated = false
         var params = buildParams(prepared.history)
         val startedAt = System.nanoTime()
         try {
@@ -135,11 +144,35 @@ class ChatService(
                     emit(ChatEvent.Delta(delta))
                 }
                 stopReason = result.stopReason
-                // 서버 쪽 도구 반복이 한도에 걸린 경우. 받은 응답을 그대로 붙여 보내면 이어서 진행한다
-                if (stopReason != StopReason.PAUSE_TURN || continuations >= MAX_CONTINUATIONS) break
+                // 이어 보낼 때는 받은 응답(thinking·도구 블록 포함)을 바꾸지 않고 그대로 붙인다
                 val message = result.message ?: break
-                params = params.toBuilder().addMessage(message).build()
-                continuations++
+                when {
+                    // 서버 쪽 도구 반복이 한도에 걸렸다. 그대로 붙여 보내면 이어서 진행한다
+                    stopReason == StopReason.PAUSE_TURN && continuations < MAX_CONTINUATIONS -> {
+                        params = params.toBuilder().addMessage(message).build()
+                        continuations++
+                    }
+                    // 우리 서버가 실행할 도구를 불렀다. 모든 tool_use에 tool_result를 붙여 돌려준다
+                    stopReason == StopReason.TOOL_USE && toolRounds < MAX_TOOL_ROUNDS -> {
+                        val results = message.content().mapNotNull { it.toolUse().orElse(null) }.map { block ->
+                            toolCalls++
+                            val outcome = if (block.name() == CREATE_TASK_TOOL) {
+                                createTask.run(block, prepared.conversationId, alreadyCreated = taskCreated)
+                            } else {
+                                createTask.unknown(block)
+                            }
+                            outcome.task?.let {
+                                taskCreated = true
+                                emit(ChatEvent.TaskCreated(it.id, it.instruction))
+                            }
+                            outcome.result
+                        }
+                        if (results.isEmpty()) break
+                        params = params.toBuilder().addMessage(message).addUserMessageOfBlockParams(results).build()
+                        toolRounds++
+                    }
+                    else -> break
+                }
             }
         } catch (e: Exception) {
             log.error("conversation {} streaming failed", prepared.conversationId, e)
@@ -152,7 +185,7 @@ class ChatService(
                 cacheReadTokens = usage.cacheReadTokens, cacheCreationTokens = usage.cacheCreationTokens,
                 durationMs = elapsedMs(startedAt), historyMessages = prepared.history.size,
                 webSearchRequests = usage.webSearchRequests, webFetchRequests = usage.webFetchRequests,
-                continuations = continuations,
+                continuations = continuations, toolCalls = toolCalls,
                 error = failure?.let { classifyClaudeError(it) },
             )
         )
@@ -167,7 +200,7 @@ class ChatService(
             failure != null -> MessageStatus.INTERRUPTED
             stopReason == StopReason.MAX_TOKENS -> MessageStatus.TRUNCATED
             // 이어 받기 한도를 넘겨 끝까지 받지 못했다
-            stopReason == StopReason.PAUSE_TURN -> MessageStatus.TRUNCATED
+            stopReason == StopReason.PAUSE_TURN || stopReason == StopReason.TOOL_USE -> MessageStatus.TRUNCATED
             stopReason == StopReason.REFUSAL -> MessageStatus.REFUSED
             stopReason == StopReason.END_TURN || stopReason == StopReason.STOP_SEQUENCE -> MessageStatus.COMPLETE
             else -> MessageStatus.INTERRUPTED
@@ -280,7 +313,8 @@ class ChatService(
             usage.webSearchRequests = usage.webSearchRequests.plus(searches)
             usage.webFetchRequests = usage.webFetchRequests.plus(fetches)
         }
-        val message = if (stopReason == StopReason.PAUSE_TURN && accumulating) {
+        // 이어 보내야 하는 경우만 응답 전체가 필요하다. max_tokens·refusal로 끝난 응답의 도구는 실행하지 않는다
+        val message = if ((stopReason == StopReason.PAUSE_TURN || stopReason == StopReason.TOOL_USE) && accumulating) {
             runCatching { accumulator.message() }
                 .onFailure { log.warn("conversation {} paused reply could not be rebuilt: {}", conversationId, it.toString()) }
                 .getOrNull()
@@ -301,7 +335,7 @@ class ChatService(
             .model(model)
             .maxTokens(4096)
             .system(SYSTEM_PROMPT.trimIndent() + "\n\n" + context.forClaude())
-            .tools(WEB_TOOLS)
+            .tools(WEB_TOOLS + ToolUnion.ofTool(createTask.definition))
             .apply {
                 history.forEach {
                     if (it.role == "user") addUserMessage(it.content) else addAssistantMessage(it.content)
