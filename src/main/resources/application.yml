@@ -7,7 +7,14 @@ spring:
     open-in-view: false
 
 app:
-   passcode: ${APP_PASSCODE}
+   # bcrypt 해시 (./gradlew -q hashPassword --console=plain)
+   password-hash: ${APP_PASSWORD_HASH}
+   # 인증 앱 비밀값 base32 (./gradlew -q totpSecret --console=plain)
+   totp-secret: ${APP_TOTP_SECRET}
+   # 전환 기간용. 설정돼 있을 때만 예전 X-App-Passcode 헤더를 받는다. 클라이언트가 /auth/login으로 바뀌면 지운다
+   passcode: ${APP_PASSCODE:}
+   # 앞단 프록시가 X-Forwarded-For를 덮어쓰는 환경에서만 true
+   trust-forwarded-for: ${APP_TRUST_FORWARDED_FOR:false}
    allowed-origins: ${ALLOWED_ORIGINS:http://localhost:3000}
 
 anthropic:

@@ -11,7 +11,8 @@
 | `SPRING_DATASOURCE_URL` | 예: `jdbc:postgresql://<host>:5432/<db>` | 기동 실패. 개발에서는 `spring-boot-docker-compose`가 넣어 주지만 이 모듈은 jar에 들어가지 않는다 |
 | `SPRING_DATASOURCE_USERNAME` | DB 사용자 | 기동 실패 |
 | `SPRING_DATASOURCE_PASSWORD` | DB 비밀번호 | 기동 실패 |
-| `APP_PASSCODE` | 클라이언트가 `X-App-Passcode` 헤더로 보내는 값. 충분히 긴 임의 문자열 | 없거나 비어 있으면 기동 실패 (`APP_PASSCODE must not be blank`) |
+| `APP_PASSWORD_HASH` | 로그인 비밀번호의 bcrypt 해시. `./gradlew -q hashPassword --console=plain`으로 만든다(비밀번호는 표준 입력, 12자 이상). 원래 비밀번호는 어디에도 두지 않는다 | 없거나 bcrypt 형식이 아니면 기동 실패 |
+| `APP_TOTP_SECRET` | 인증 앱(Google Authenticator 등) 비밀값(base32). `./gradlew -q totpSecret --console=plain`이 값과 `otpauth://` URI를 출력한다. URI를 QR로 만들어 인증 앱에 등록한다 | 없거나 80비트 미만이면 기동 실패 |
 | `ANTHROPIC_API_KEY` | Claude API 키 | 없으면 기동 실패. 값이 틀리면 기동은 되고 채팅·작업이 "서버 설정 문제로 처리할 수 없습니다"로 실패한다 |
 | `ALLOWED_ORIGINS` | 프론트엔드 주소. 여러 개면 쉼표로 구분 (예: `https://app.example.com`) | 기본값 `http://localhost:3000`이 쓰여 브라우저 요청이 CORS로 막힌다 |
 
@@ -20,6 +21,8 @@
 | 변수 | 기본값 | 내용 |
 |---|---|---|
 | `PORT` | `8080` | 플랫폼이 포트를 정해 주면 그대로 쓴다 |
+| `APP_PASSCODE` | 없음 | **전환 기간용.** 설정돼 있을 때만 예전 `X-App-Passcode` 헤더를 받는다(쓰일 때 1분에 한 번 경고 로그). 클라이언트가 `/auth/login`으로 바뀌면 **지운다** |
+| `APP_TRUST_FORWARDED_FOR` | `false` | 앞단 프록시가 `X-Forwarded-For`를 덮어쓰는 환경에서만 `true`. 로그인 시도 제한과 감사 로그가 실제 IP를 쓰고, `X-Forwarded-Proto: https`면 HSTS를 붙인다. 프록시 없이 `true`로 두면 IP를 위조해 시도 제한을 피할 수 있다 |
 | `JAVA_TOOL_OPTIONS` | 없음 | `-XX:MaxRAMPercentage=75` 권장. 지정하지 않으면 JVM이 컨테이너 메모리의 25%만 힙으로 쓴다 |
 | `LOGGING_STRUCTURED_FORMAT_CONSOLE` | 없음 (텍스트 로그) | `ecs`로 두면 로그가 JSON 한 줄씩 나온다. Claude 사용량 로그(`claude.usage`)의 토큰 수 등이 별도 필드가 되어 로그 서비스에서 바로 집계할 수 있다 |
 
@@ -52,10 +55,15 @@
 ## 5. 배포 후 확인
 
 ```sh
-# 패스코드 없이 → 401
+# 인증 없이 → 401
 curl -s -o /dev/null -w "%{http_code}\n" https://<server>/conversations
-# 패스코드와 함께 → 200
-curl -s -o /dev/null -w "%{http_code}\n" -H "X-App-Passcode: <APP_PASSCODE>" https://<server>/conversations
+# 로그인 (인증 앱의 지금 코드) → {"token": ...}
+curl -s -H 'Content-Type: application/json' \
+  -d '{"password":"<비밀번호>","totp":"<6자리>","deviceName":"배포 확인"}' https://<server>/auth/login
+# 토큰과 함께 → 200, 응답 헤더에 Cache-Control: no-store
+curl -s -D - -o /dev/null -H "Authorization: Bearer <token>" https://<server>/conversations
+# 확인용 세션은 끝나면 로그아웃 → 204
+curl -s -o /dev/null -w "%{http_code}\n" -X POST -H "Authorization: Bearer <token>" https://<server>/auth/logout
 # 프론트엔드 origin의 preflight → 200
 curl -s -o /dev/null -w "%{http_code}\n" -X OPTIONS \
   -H "Origin: <프론트엔드 주소>" -H "Access-Control-Request-Method: GET" https://<server>/conversations

@@ -1,6 +1,7 @@
 package com.samoyed.ai_manager_server.config
 
 import com.anthropic.client.AnthropicClient
+import com.samoyed.ai_manager_server.TestAuth
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import com.samoyed.ai_manager_server.chat.MAX_CHAT_MESSAGE
 import com.samoyed.ai_manager_server.profile.MAX_PROFILE_FULL
@@ -32,6 +33,7 @@ class ValidationTest {
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var mvc: MockMvc
+    @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var jdbc: JdbcClient
 
     @Test
@@ -78,7 +80,7 @@ class ValidationTest {
         val before = fullProfile()
 
         mvc.put("/profile") {
-            header("X-App-Passcode", "test-passcode")
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """{"fullMd":"${"a".repeat(MAX_PROFILE_FULL + 1)}","briefMd":"요약"}"""
         }.andExpect {
@@ -99,7 +101,7 @@ class ValidationTest {
 
     private fun send(path: String, body: String): ResultActionsDsl =
         mvc.post(path) {
-            header("X-App-Passcode", "test-passcode")
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = body
         }

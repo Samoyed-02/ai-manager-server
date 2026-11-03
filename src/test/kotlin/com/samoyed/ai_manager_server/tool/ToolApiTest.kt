@@ -1,6 +1,7 @@
 package com.samoyed.ai_manager_server.tool
 
 import com.anthropic.client.AnthropicClient
+import com.samoyed.ai_manager_server.TestAuth
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import com.samoyed.ai_manager_server.activity.ActivityLogRepository
 import com.samoyed.ai_manager_server.memory.MemoryRepository
@@ -40,6 +41,7 @@ class ToolApiTest {
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var mvc: MockMvc
+    @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var routines: RoutineRepository
     @Autowired lateinit var activities: ActivityLogRepository
     @Autowired lateinit var memories: MemoryRepository
@@ -52,7 +54,7 @@ class ToolApiTest {
 
     @Test
     fun `도구 목록을 함수 선언 형태로 준다`() {
-        mvc.get("/tools") { header(HEADER, PASSCODE) }.andExpect {
+        mvc.get("/tools") { header("Authorization", testAuth.bearer) }.andExpect {
             status { isOk() }
             jsonPath("$.length()") { value(10) }
             listOf(
@@ -144,13 +146,9 @@ class ToolApiTest {
     }
 
     private fun call(name: String, args: String): ResultActionsDsl = mvc.post("/tools/$name") {
-        header(HEADER, PASSCODE)
+        header("Authorization", testAuth.bearer)
         contentType = MediaType.APPLICATION_JSON
         content = """{"args":$args}"""
     }
 
-    private companion object {
-        const val HEADER = "X-App-Passcode"
-        const val PASSCODE = "test-passcode"
-    }
 }

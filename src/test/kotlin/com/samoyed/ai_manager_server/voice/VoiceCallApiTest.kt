@@ -1,6 +1,7 @@
 package com.samoyed.ai_manager_server.voice
 
 import com.anthropic.client.AnthropicClient
+import com.samoyed.ai_manager_server.TestAuth
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import com.samoyed.ai_manager_server.chat.ChatMessageRepository
 import com.samoyed.ai_manager_server.chat.ConversationChannel
@@ -31,6 +32,7 @@ class VoiceCallApiTest {
     lateinit var client: AnthropicClient
 
     @Autowired lateinit var mvc: MockMvc
+    @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var conversations: ConversationRepository
     @Autowired lateinit var messages: ChatMessageRepository
     @Autowired lateinit var jdbc: JdbcClient
@@ -43,7 +45,7 @@ class VoiceCallApiTest {
     @Test
     fun `통화 기록을 VOICE 대화로 저장한다`() {
         val body = mvc.post("/voice/calls") {
-            header("X-App-Passcode", "test-passcode")
+            header("Authorization", testAuth.bearer)
             contentType = MediaType.APPLICATION_JSON
             content = """
                 {"startedAt":"2026-11-03T12:30:00Z","endedAt":"2026-11-03T12:40:00Z",
@@ -64,7 +66,7 @@ class VoiceCallApiTest {
                 )
             },
         )
-        mvc.get("/conversations") { header("X-App-Passcode", "test-passcode") }.andExpect {
+        mvc.get("/conversations") { header("Authorization", testAuth.bearer) }.andExpect {
             jsonPath("$[0].channel") { value("VOICE") }
         }
     }
@@ -83,7 +85,7 @@ class VoiceCallApiTest {
     }
 
     private fun post(body: String) = mvc.post("/voice/calls") {
-        header("X-App-Passcode", "test-passcode")
+        header("Authorization", testAuth.bearer)
         contentType = MediaType.APPLICATION_JSON
         content = body
     }
