@@ -1,7 +1,9 @@
 package com.samoyed.ai_manager_server.chat
 
 import com.anthropic.client.AnthropicClient
+import com.anthropic.models.messages.CacheControlEphemeral
 import com.anthropic.models.messages.ContentBlockParam
+import com.anthropic.models.messages.TextBlockParam
 import com.anthropic.models.messages.ToolResultBlockParam
 import com.fasterxml.jackson.core.type.TypeReference
 import com.samoyed.ai_manager_server.tool.ToolContext
@@ -40,6 +42,9 @@ private const val SYSTEM_PROMPT = """
 이전 답변 앞의 [서버 기록]은 그 답변에서 서버가 실제로 실행한 작업이야. 직접 쓰지 마.
 [서버 기록]이 없는 예전 답변도 하지 않았다고 단정하지 말고, 필요하면 조회 도구로 확인해.
 """
+
+/** 캐시 유지 5분. 한 턴의 도구 라운드와 연달아 주고받는 대화가 읽는다 */
+private val CACHE: CacheControlEphemeral = CacheControlEphemeral.builder().ttl(CacheControlEphemeral.Ttl.TTL_5M).build()
 
 /** 이전 답변 앞에 붙여 모델에게 보여 주는 실행 기록의 머리말 */
 private const val ACTIONS_HEADER = "[서버 기록: 이 답변에서 실제로 실행한 작업]"
@@ -110,6 +115,11 @@ class ChatService(
     private val tx: TransactionTemplate,
     private val tools: ToolRegistry,
     @Value("\${claude.model}") private val model: String,
+    /**
+     * true면 매번 바뀌는 맥락(시각, 기억, 활동…)을 현재 사용자 메시지 뒤의 system 메시지로 보낸다.
+     * 맥락이 대화 기록 뒤에 오므로 기록까지 캐시된다. 모델이 대화 중 system 메시지를 받지 않으면 false로 되돌린다
+     */
+    @Value("\${claude.context-as-system-message:true}") private val contextAsSystemMessage: Boolean = true,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val blockLog = LoggerFactory.getLogger("chat.blocks")
@@ -199,6 +209,7 @@ class ChatService(
                             )
                         }
                         if (results.isEmpty()) break
+                        // 같은 턴의 다음 요청은 자동 캐시 지점(마지막 블록)으로 맥락·도구 결과까지 캐시에서 읽는다
                         params = params.toBuilder().addMessage(message).addUserMessageOfBlockParams(results).build()
                         toolRounds++
                     }
@@ -423,18 +434,38 @@ class ChatService(
             "- [$title](${source.url})"
         }
 
-    private fun buildParams(prepared: PreparedChat): MessageCreateParams =
-        MessageCreateParams.builder()
+    /**
+     * 캐시는 tools → system → messages 순서의 앞부분이 똑같을 때만 읽힌다. 바뀌지 않는 것을 앞에, 바뀌는 것을 뒤에 둔다.
+     * ① 고정 지시(앞의 도구 정의 포함) ② 현재 사용자 메시지에 캐시 지점을 두고, 매 턴 바뀌는 맥락은 그 뒤에 보낸다.
+     * 다음 턴에는 이번 ②까지가 그대로 앞부분이 되어 대화 기록 전체를 캐시에서 읽는다.
+     * 같은 턴의 도구 라운드는 자동 캐시 지점(요청의 마지막 블록)으로 맥락·도구 결과까지 읽는다
+     */
+    private fun buildParams(prepared: PreparedChat): MessageCreateParams {
+        val context = context.forClaude(prepared.conversationId)
+        val system = buildList {
+            add(TextBlockParam.builder().text(SYSTEM_PROMPT.trimIndent()).cacheControl(CACHE).build())
+            if (!contextAsSystemMessage) add(TextBlockParam.builder().text(context).build())
+        }
+        return MessageCreateParams.builder()
             .model(model)
             .maxTokens(4096)
-            .system(SYSTEM_PROMPT.trimIndent() + "\n\n" + context.forClaude(prepared.conversationId))
+            .systemOfTextBlockParams(system)
             .tools(WEB_TOOLS + tools.claudeDefinitions.map { ToolUnion.ofTool(it) })
+            .cacheControl(CACHE)
             .apply {
-                prepared.history.forEach {
-                    if (it.role == "user") addUserMessage(it.content) else addAssistantMessage(withActions(it))
+                prepared.history.forEachIndexed { i, message ->
+                    when {
+                        message.role != "user" -> addAssistantMessage(withActions(message))
+                        i == prepared.history.lastIndex -> addUserMessageOfBlockParams(
+                            listOf(ContentBlockParam.ofText(TextBlockParam.builder().text(message.content).cacheControl(CACHE).build()))
+                        )
+                        else -> addUserMessage(message.content)
+                    }
                 }
+                if (contextAsSystemMessage) addSystemMessage(context)
             }
             .build()
+    }
 
     /**
      * 답변 글만 다시 보내면 모델은 "등록했어요" 같은 말의 근거를 보지 못해 지어낸 말로 여기고 정정한다.
