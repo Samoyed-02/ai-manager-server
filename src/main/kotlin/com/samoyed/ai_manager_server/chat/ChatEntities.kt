@@ -55,6 +55,10 @@ class ChatMessage(
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     val status: MessageStatus = MessageStatus.COMPLETE,
+
+    /** 이 답변을 만들면서 서버가 실제로 실행한 작업. 한 줄에 하나, 없으면 null */
+    @Column(columnDefinition = "text")
+    val actions: String? = null,
 ) {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

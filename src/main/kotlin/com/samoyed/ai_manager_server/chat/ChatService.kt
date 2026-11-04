@@ -33,7 +33,13 @@ private const val SYSTEM_PROMPT = """
 출처 목록은 서버가 답변 끝에 붙이니 직접 쓰지 마.
 말로 요청한 일은 도구로 처리해: 긴 문서 작성은 create_task, "기억해"는 save_memory, 반복 알림·브리핑은 루틴 도구, 한 일은 log_activity.
 도구로 처리했으면 무엇을 했는지 짧게 알려 주고, 삭제처럼 되돌릴 수 없는 일은 먼저 확인받아.
+이전 답변 앞의 [서버 기록]은 그 답변에서 서버가 실제로 실행한 작업이야. 직접 쓰지 마.
+[서버 기록]이 없는 예전 답변도 하지 않았다고 단정하지 말고, 필요하면 조회 도구로 확인해.
 """
+
+/** 이전 답변 앞에 붙여 모델에게 보여 주는 실행 기록의 머리말 */
+private const val ACTIONS_HEADER = "[서버 기록: 이 답변에서 실제로 실행한 작업]"
+private const val MAX_ACTION_DETAIL = 100
 
 /** 질문 하나에 쓸 수 있는 웹 검색·페이지 읽기 횟수. 검색은 1,000회당 $10 */
 private const val MAX_WEB_SEARCHES = 3L
@@ -143,6 +149,7 @@ class ChatService(
         var toolRounds = 0
         var toolCalls = 0
         val usedInReply = mutableMapOf<String, Int>()
+        val actions = mutableListOf<String>()
         val toolContext = ToolContext(ConversationChannel.CHAT, prepared.conversationId)
         var params = buildParams(prepared)
         val startedAt = System.nanoTime()
@@ -170,6 +177,12 @@ class ChatService(
                             when {
                                 outcome.task != null -> emit(ChatEvent.TaskCreated(outcome.task.id, outcome.task.instruction))
                                 outcome.ok && outcome.summary != null -> emit(ChatEvent.Action(block.name(), outcome.summary))
+                            }
+                            actions += when {
+                                outcome.task != null -> "문서 작업 생성: ${outcome.task.instruction.oneLine()}"
+                                !outcome.ok -> "실패: ${block.name()} (${outcome.content.oneLine()})"
+                                outcome.summary != null -> outcome.summary.oneLine()
+                                else -> "조회: ${block.name()}"
                             }
                             ContentBlockParam.ofToolResult(
                                 ToolResultBlockParam.builder()
@@ -231,7 +244,10 @@ class ChatService(
             return
         }
 
-        if (!saveAssistant(prepared.conversationId, text.toString(), status)) {
+        usage.webSearchRequests?.takeIf { it > 0 }?.let { actions += "웹 검색 ${it}회" }
+        usage.webFetchRequests?.takeIf { it > 0 }?.let { actions += "웹 페이지 읽기 ${it}회" }
+
+        if (!saveAssistant(prepared.conversationId, text.toString(), status, actions)) {
             log.info("conversation {} deleted while replying, reply not saved", prepared.conversationId)
             emit(ChatEvent.Error("CONVERSATION_DELETED", "대화가 삭제되어 답변을 저장하지 않았어요"))
             return
@@ -348,16 +364,28 @@ class ChatService(
             .tools(WEB_TOOLS + tools.claudeDefinitions.map { ToolUnion.ofTool(it) })
             .apply {
                 prepared.history.forEach {
-                    if (it.role == "user") addUserMessage(it.content) else addAssistantMessage(it.content)
+                    if (it.role == "user") addUserMessage(it.content) else addAssistantMessage(withActions(it))
                 }
             }
             .build()
 
+    /**
+     * 답변 글만 다시 보내면 모델은 "등록했어요" 같은 말의 근거를 보지 못해 지어낸 말로 여기고 정정한다.
+     * 실제로 실행한 작업을 답변 앞에 붙여 근거로 보여 준다
+     */
+    private fun withActions(message: ChatMessage): String =
+        message.actions?.takeIf { it.isNotBlank() }
+            ?.let { actions -> actions.lines().joinToString("\n", prefix = "$ACTIONS_HEADER\n", postfix = "\n\n") { "- $it" } + message.content }
+            ?: message.content
+
+    private fun String.oneLine(): String =
+        replace(Regex("\\s+"), " ").trim().let { if (it.length > MAX_ACTION_DETAIL) it.take(MAX_ACTION_DETAIL) + "…" else it }
+
     /** 응답 도중 대화가 삭제됐으면 저장하지 않고 false를 돌려준다 */
-    private fun saveAssistant(conversationId: UUID, text: String, status: MessageStatus): Boolean =
+    private fun saveAssistant(conversationId: UUID, text: String, status: MessageStatus, actions: List<String>): Boolean =
         tx.execute {
             val conversation = conversations.findForUpdate(conversationId) ?: return@execute false
-            messages.save(ChatMessage(conversationId, "assistant", text, status))
+            messages.save(ChatMessage(conversationId, "assistant", text, status, actions.takeIf { it.isNotEmpty() }?.joinToString("\n")))
             conversation.updatedAt = OffsetDateTime.now()
             conversations.save(conversation)
             true

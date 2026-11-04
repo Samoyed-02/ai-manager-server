@@ -39,6 +39,7 @@ class ChatActionToolsTest {
     @Autowired lateinit var routines: RoutineRepository
     @Autowired lateinit var routineService: RoutineService
     @Autowired lateinit var jdbc: JdbcClient
+    @Autowired lateinit var messages: ChatMessageRepository
 
     private val messageService: MessageService = mock(MessageService::class.java)
     private val events = mutableListOf<ChatEvent>()
@@ -126,6 +127,62 @@ class ChatActionToolsTest {
             { assertEquals(listOf(false, false, false, false, false, true, true), results.map { it.isError().get() }) },
             { assertTrue(results.last().content().get().asString().contains("HH:mm")) },
             { assertEquals(0, routines.count()) },
+        )
+    }
+
+    @Test
+    fun `실행한 작업을 답변과 함께 저장하고 다음 요청에서 답변 앞에 서버 기록으로 보여 준다`() {
+        val first = chat.prepare(null, "오늘 30분 달렸어")
+        messageService.streamsInOrder(
+            chatStream {
+                start()
+                toolUse("log_activity", mapOf("description" to "달리기", "category" to "EXERCISE", "minutes" to 30))
+                toolUse("list_routines", emptyMap())
+                toolUse("create_routine", mapOf("title" to "알림", "kind" to "REMINDER", "message" to "m", "time" to "9시"))
+                end("tool_use")
+            },
+            chatStream { start(); text("달리기 30분을 기록했어요."); end("end_turn") },
+        )
+        chat.respond(first) { events += it }
+
+        val saved = messages.findByConversationIdOrderByIdAsc(first.conversationId).last()
+        val actions = saved.actions!!.lines()
+
+        val second = chat.prepare(first.conversationId, "방금 뭐 기록했지?")
+        val sent = messageService.streamsInOrder(chatStream { start(); text("달리기 30분이요."); end("end_turn") })
+        chat.respond(second) { }
+
+        val replayed = sent.single().messages().single { it.role().asString() == "assistant" }.content().asString()
+        assertAll(
+            { assertEquals("달리기 30분을 기록했어요.", saved.content) },
+            { assertEquals("활동 기록: 달리기 30분", actions[0]) },
+            // 조회만 한 도구도 남겨, 확인했다는 사실을 알 수 있게 한다
+            { assertEquals("조회: list_routines", actions[1]) },
+            // 실패는 성공으로 오해하지 않게 사유와 함께 남긴다
+            { assertTrue(actions[2].startsWith("실패: create_routine ("), actions[2]) },
+            { assertEquals(3, actions.size) },
+            {
+                assertEquals(
+                    "[서버 기록: 이 답변에서 실제로 실행한 작업]\n- " + actions.joinToString("\n- ") + "\n\n달리기 30분을 기록했어요.",
+                    replayed,
+                )
+            },
+        )
+    }
+
+    @Test
+    fun `도구를 쓰지 않은 답변은 기록 없이 그대로 다시 보낸다`() {
+        val first = chat.prepare(null, "안녕")
+        messageService.streamsInOrder(chatStream { start(); text("안녕하세요"); end("end_turn") })
+        chat.respond(first) { }
+
+        val second = chat.prepare(first.conversationId, "뭐 해?")
+        val sent = messageService.streamsInOrder(chatStream { start(); text("대기 중이에요"); end("end_turn") })
+        chat.respond(second) { }
+
+        assertAll(
+            { assertEquals(null, messages.findByConversationIdOrderByIdAsc(first.conversationId)[1].actions) },
+            { assertEquals("안녕하세요", sent.single().messages().single { it.role().asString() == "assistant" }.content().asString()) },
         )
     }
 

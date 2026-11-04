@@ -83,6 +83,7 @@ class ChatWebToolsTest {
         assertAll(
             { assertEquals("첫째 소식. 같은 기사. 블로그 내용.$expectedFooter", lastAssistant(prepared.conversationId).content) },
             { assertEquals(MessageStatus.COMPLETE, lastAssistant(prepared.conversationId).status) },
+            { assertEquals("웹 검색 1회\n웹 페이지 읽기 1회", lastAssistant(prepared.conversationId).actions) },
             { assertEquals(ChatEvent.Delta(expectedFooter), events[events.size - 2]) },
             { assertEquals(ChatEvent.Done(MessageStatus.COMPLETE), events.last()) },
             { assertTrue(line.contains("web_search_requests=1 web_fetch_requests=1 continuations=0"), line) },
@@ -97,6 +98,7 @@ class ChatWebToolsTest {
         chat.respond(prepared) { events += it }
 
         assertEquals("안녕하세요", lastAssistant(prepared.conversationId).content)
+        assertEquals(null, lastAssistant(prepared.conversationId).actions)
     }
 
     @Test

@@ -18,6 +18,8 @@ data class MessageDto(
     val content: String,
     val status: MessageStatus,
     val createdAt: OffsetDateTime,
+    /** 이 답변에서 서버가 실행한 작업 (활동 기록, 목표 등록, 웹 검색 등). 없으면 빈 목록 */
+    val actions: List<String>,
 )
 
 @RestController
@@ -34,7 +36,7 @@ class ConversationController(
     @GetMapping("/{id}/messages")
     fun messages(@PathVariable id: UUID): List<MessageDto> =
         messages.findByConversationIdOrderByIdAsc(id)
-            .map { MessageDto(it.id!!, it.role, it.content, it.status, it.createdAt) }
+            .map { MessageDto(it.id!!, it.role, it.content, it.status, it.createdAt, it.actions?.lines().orEmpty()) }
 
     /** 답변이 스트리밍되는 중이면 그 답변은 저장되지 않는다 (ChatService.saveAssistant) */
     @DeleteMapping("/{id}")
