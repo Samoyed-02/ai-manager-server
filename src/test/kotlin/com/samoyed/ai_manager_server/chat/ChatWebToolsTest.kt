@@ -118,7 +118,8 @@ class ChatWebToolsTest {
         val (first, second) = sent
         val resent = second.messages().last()
         assertAll(
-            { assertEquals("앞부분. 뒷부분.", lastAssistant(prepared.conversationId).content) },
+            // 인용이 없으니 검색한 페이지를 대신 붙인다
+            { assertEquals("앞부분. 뒷부분.\n\n**검색한 페이지**\n- [검색 결과](https://example.com/result)", lastAssistant(prepared.conversationId).content) },
             { assertEquals(MessageStatus.COMPLETE, lastAssistant(prepared.conversationId).status) },
             // 이어 보낼 때는 멈춘 응답(검색 블록 포함)을 assistant 메시지로 그대로 붙인다
             { assertEquals(first.messages().size + 1, second.messages().size) },
@@ -132,6 +133,41 @@ class ChatWebToolsTest {
     }
 
     @Test
+    fun `입력 조각 없이 온 서버 도구 블록도 모아서 pause_turn을 이어 받는다`() {
+        val prepared = chat.prepare(null, "날씨 알려줘")
+        val sent = messageService.streamsInOrder(
+            chatStream { start(); webSearch("서울 날씨", inputDelta = false); end("pause_turn", searches = 1) },
+            chatStream { start(); text("맑아요."); end("end_turn") },
+        )
+
+        chat.respond(prepared) { events += it }
+
+        val resent = sent.last().messages().last().content().asBlockParams()
+        assertAll(
+            { assertEquals(2, sent.size) },
+            // 시작 블록에 있던 입력이 그대로 다시 보내진다
+            { assertEquals("서울 날씨", resent.single { it.isServerToolUse() }.asServerToolUse()._input().asObject().get()["query"]!!.asString().get()) },
+            { assertEquals(MessageStatus.COMPLETE, lastAssistant(prepared.conversationId).status) },
+        )
+    }
+
+    @Test
+    fun `인용이 없으면 검색한 페이지를 최대 5개 붙인다`() {
+        val prepared = chat.prepare(null, "요즘 소식")
+        messageService.streamsInOrder(chatStream {
+            start()
+            (1..6).forEach { webSearch("q$it", resultUrl = "https://news.example.com/$it", title = "기사 $it", inputDelta = false) }
+            text("요약입니다.")
+            end("end_turn", searches = 6)
+        })
+
+        chat.respond(prepared) { events += it }
+
+        val expectedFooter = "\n\n**검색한 페이지**\n" + (1..5).joinToString("\n") { "- [기사 $it](https://news.example.com/$it)" }
+        assertEquals("요약입니다.$expectedFooter", lastAssistant(prepared.conversationId).content)
+    }
+
+    @Test
     fun `이어 받기 한도를 넘기면 받은 만큼 TRUNCATED로 저장한다`() {
         val prepared = chat.prepare(null, "끝없이 조사해줘")
         val paused = { n: Int -> chatStream { start(); text("$n."); webSearch("q$n"); end("pause_turn") } }
@@ -142,7 +178,7 @@ class ChatWebToolsTest {
         assertAll(
             // 첫 요청 + 이어 받기 3번
             { assertEquals(4, sent.size) },
-            { assertEquals("1.2.3.4.", lastAssistant(prepared.conversationId).content.substringBefore("\n\n**출처**")) },
+            { assertEquals("1.2.3.4.", lastAssistant(prepared.conversationId).content.substringBefore("\n\n**")) },
             { assertEquals(MessageStatus.TRUNCATED, lastAssistant(prepared.conversationId).status) },
             { assertEquals(ChatEvent.Done(MessageStatus.TRUNCATED), events.last()) },
         )

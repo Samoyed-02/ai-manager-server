@@ -5,6 +5,7 @@
 #
 # 사용: scripts/live-check.sh <ANTHROPIC_API_KEY가 든 env 파일> [예산 달러, 기본 2]
 #   키는 파일 경로로만 받아 docker --env-file로 넘긴다. 이 스크립트는 키를 읽거나 출력하지 않는다.
+#   ONLY=3,17처럼 번호를 주면 그 시나리오만 돌린다 (준비·로그인은 항상). 대화가 필요한 시나리오는 2번도 함께 준다
 #   KEEP=1이면 끝나도 컨테이너를 남긴다 (정리: docker rm -f aim-live-app aim-live-db; docker network rm aim-live)
 set -uo pipefail
 
@@ -19,6 +20,7 @@ NET=aim-live DB=aim-live-db APP=aim-live-app IMAGE=aim-live:local PORT=18080
 BASE="http://localhost:$PORT"
 WORK="$(mktemp -d)"
 TOKEN=""
+A=""
 
 cleanup() {
   if [ "${KEEP:-0}" != 1 ]; then
@@ -29,6 +31,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+want() { [ -z "${ONLY:-}" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 section() { printf '\n=== %s ===\n' "$*"; }
 api() { # api METHOD PATH [JSON]
   curl -s -X "$1" "$BASE$2" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' ${3:+-d "$3"}
@@ -73,7 +76,7 @@ docker run -d --name "$DB" --network "$NET" -e POSTGRES_USER=live -e POSTGRES_PA
 wait_for 60 "DB 준비" docker exec "$DB" pg_isready -U live -d live || exit 1
 docker run -d --name "$APP" --network "$NET" -p "$PORT:8080" --env-file "$ENV_FILE" \
   -e SPRING_DATASOURCE_URL="jdbc:postgresql://$DB:5432/live" -e SPRING_DATASOURCE_USERNAME=live -e SPRING_DATASOURCE_PASSWORD=live \
-  -e APP_PASSWORD_HASH="$HASH" -e APP_TOTP_SECRET="$SECRET" "$IMAGE" >/dev/null
+  -e APP_PASSWORD_HASH="$HASH" -e APP_TOTP_SECRET="$SECRET" -e LOGGING_LEVEL_CHAT_BLOCKS=DEBUG "$IMAGE" >/dev/null
 wait_for 120 "서버 기동" sh -c "docker logs $APP 2>&1 | grep -q 'Started AiManagerServerApplication'" \
   || { docker logs "$APP" 2>&1 | tail -30; exit 1; }
 
@@ -83,38 +86,58 @@ LOGIN=$(curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
 TOKEN=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("token",""))' "$LOGIN")
 [ -n "$TOKEN" ] && echo "  로그인 성공" || { echo "  로그인 실패: $LOGIN"; exit 1; }
 
+if want 2; then
 section "2. 기본 대화"
 chat "안녕! 오늘부터 너를 내 개인 매니저로 쓸게. 짧게 인사해줘."
 last_call
 A=$(cat "$WORK/conv")
+fi
 
+if want 3; then
 section "3. 웹 검색 (출처 표시)"
 budget_ok && { chat "오늘 서울 날씨 어때? 출처도 알려줘." "$A"; last_call; }
+budget_ok && { chat "이번 주 국내 IT 업계 주요 뉴스 3개만 알려줘."; last_call; }
+fi
 
+if want 4; then
 section "4. 검색이 필요 없는 질문"
 budget_ok && { chat "파이썬에서 리스트를 뒤집는 방법 두 가지만 짧게 알려줘." "$A"; last_call; }
+fi
 
+if want 5; then
 section "5. 활동 기록 (log_activity)"
 budget_ok && { chat "오늘 아침에 30분 달리기 했어." "$A"; last_call; }
+fi
 
+if want 6; then
 section "6. 목표 만들기 (create_goal)"
 budget_ok && { chat "이번 달부터 영어 공부를 일주일에 3시간씩 하는 걸 목표로 할래." "$A"; last_call; }
+fi
 
+if want 7; then
 section "7. 목표에 연결된 활동"
 budget_ok && { chat "방금 영어 단어 40분 외웠어." "$A"; last_call; }
 echo "  활동 목록:"; api GET /activities | python3 -m json.tool
 echo "  목표 목록:"; api GET /goals | python3 -m json.tool
+fi
 
+if want 8; then
 section "8. 루틴 만들기 (create_routine)"
 budget_ok && { chat "매일 아침 8시에 오늘 할 일이랑 목표 진행 상황을 브리핑해줘." "$A"; last_call; }
+fi
 
+if want 9; then
 section "9. 기억 저장 (save_memory)"
 budget_ok && { chat "참고로 나는 커피는 디카페인만 마셔. 기억해둬." "$A"; last_call; }
+fi
 
+if want 10; then
 section "10. 삭제 확인 (바로 지우지 않고 물어보는지)"
 budget_ok && { chat "아침 루틴 지워줘." "$A"; last_call; }
 echo "  루틴 목록 (아직 남아 있어야 함):"; api GET /routines | python3 -m json.tool
+fi
 
+if want 11; then
 section "11. 문서 작업 (create_task)"
 if budget_ok; then
   chat "다음 주 영어 공부 계획표를 문서로 만들어줘. 내 목표에 맞춰서." "$A"; last_call
@@ -128,7 +151,9 @@ if budget_ok; then
     echo "  작업이 만들어지지 않음"
   fi
 fi
+fi
 
+if want 12; then
 section "12. 통화 기록과 기억 추출 (민감 정보 제외)"
 if budget_ok; then
   NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -143,10 +168,14 @@ if budget_ok; then
   echo "  기억 목록:"; api GET /memories | python3 -m json.tool
   if api GET /memories | grep -q qwer1234; then echo "  !! 와이파이 비밀번호가 기억에 들어감"; else echo "  와이파이 비밀번호는 기억에 없음"; fi
 fi
+fi
 
+if want 13; then
 section "13. 통화용 도구 중계 (/tools/log_activity)"
 api POST /tools/log_activity '{"args":{"description":"기타 코드 연습","category":"OTHER","minutes":20}}' | python3 -m json.tool
+fi
 
+if want 14; then
 section "14. 브리핑 루틴 실행"
 if budget_ok; then
   sql "update routines set next_run_at = now() where kind = 'BRIEFING'"
@@ -155,7 +184,9 @@ if budget_ok; then
   api GET /notifications | python3 -c 'import json,sys
 for n in json.load(sys.stdin): print("  [" + str(n.get("title")) + "]"); print("    " + str(n.get("body", n.get("message", ""))).replace("\n", "\n    "))'
 fi
+fi
 
+if want 15; then
 section "15. 주간 회고 루틴 실행"
 if budget_ok; then
   sql "update routines set next_run_at = now() where kind = 'REVIEW'"
@@ -163,7 +194,9 @@ if budget_ok; then
   R=$(api GET /reviews | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r[0]["id"] if r else "")')
   [ -n "$R" ] && api GET "/reviews/$R" | python3 -m json.tool
 fi
+fi
 
+if want 16; then
 section "16. 새 대화에서 맥락 이어가기"
 if budget_ok; then
   # 채팅 기억 추출은 30분 조용해야 시작한다. 기다리지 않도록 시각을 당긴다
@@ -173,9 +206,15 @@ if budget_ok; then
   chat "나에 대해 기억하는 거랑 요즘 내 목표, 이번 주에 한 활동을 정리해줘. 그리고 집 와이파이 비번 기억나?"
   last_call
 fi
+fi
 
+if want 17; then
 section "17. 비용 집계 (claude.usage)"
 docker logs "$APP" 2>&1 | $HELP cost
 echo
+echo "  응답 블록 (chat.blocks):"
+docker logs "$APP" 2>&1 | grep 'blocks=' | sed 's/.*conversation /    /' || true
+echo
 echo "  오류·경고 로그:"
 docker logs "$APP" 2>&1 | grep -E ' (ERROR|WARN) ' | grep -v 'APP_PASSCODE' | tail -20 || true
+fi

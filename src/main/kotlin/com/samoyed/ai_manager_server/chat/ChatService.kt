@@ -6,7 +6,11 @@ import com.anthropic.models.messages.ToolResultBlockParam
 import com.fasterxml.jackson.core.type.TypeReference
 import com.samoyed.ai_manager_server.tool.ToolContext
 import com.samoyed.ai_manager_server.tool.ToolRegistry
+import com.anthropic.core.JsonValue
+import com.anthropic.core.jsonMapper
 import com.anthropic.helpers.MessageAccumulator
+import com.anthropic.models.messages.RawContentBlockStartEvent
+import com.anthropic.models.messages.RawMessageStreamEvent
 import com.anthropic.models.messages.Message
 import com.anthropic.models.messages.MessageCreateParams
 import com.anthropic.models.messages.StopReason
@@ -30,7 +34,7 @@ private const val SYSTEM_PROMPT = """
 너는 사용자의 개인 AI 매니저야. 아래 사용자 프로필과 지난 대화에서 기억하는 것을 참고해서 맞춤형으로 답해.
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
 최신 정보나 사실 확인이 필요할 때만 웹 검색을 쓰고, 일반 지식이나 대화 내용만으로 답할 수 있으면 검색하지 마.
-출처 목록은 서버가 답변 끝에 붙이니 직접 쓰지 마.
+출처와 링크는 서버가 처리하니 답변에서 출처를 말하거나 링크를 쓰지 마.
 말로 요청한 일은 도구로 처리해: 긴 문서 작성은 create_task, "기억해"는 save_memory, 반복 알림·브리핑은 루틴 도구, 한 일은 log_activity.
 도구로 처리했으면 무엇을 했는지 짧게 알려 주고, 삭제처럼 되돌릴 수 없는 일은 먼저 확인받아.
 이전 답변 앞의 [서버 기록]은 그 답변에서 서버가 실제로 실행한 작업이야. 직접 쓰지 마.
@@ -51,6 +55,8 @@ private const val MAX_CONTINUATIONS = 3
 /** 우리 서버가 실행하는 도구의 결과를 돌려주고 이어 받는 최대 횟수. 목록을 본 뒤 수정하는 식으로 연달아 쓸 수 있게 한다 */
 private const val MAX_TOOL_ROUNDS = 4
 private const val MAX_SOURCES = 10
+/** 인용이 하나도 없을 때 대신 보여 줄 검색 결과 수 */
+private const val MAX_SEARCH_RESULT_SOURCES = 5
 
 private val WEB_TOOLS = listOf(
     ToolUnion.ofWebSearchTool20260209(
@@ -106,6 +112,7 @@ class ChatService(
     @Value("\${claude.model}") private val model: String,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val blockLog = LoggerFactory.getLogger("chat.blocks")
 
     fun prepare(conversationId: UUID?, userText: String): PreparedChat {
         val existing = conversationId?.let { conversations.findById(it).orElse(null) }
@@ -141,6 +148,7 @@ class ChatService(
 
         val text = StringBuilder()
         val sources = LinkedHashMap<String, Source>()
+        val searchResults = LinkedHashMap<String, Source>()
         var stopReason: StopReason? = null
         var failure: Exception? = null
         // 토큰·도구 사용량은 요청마다 받아 합친다. pause_turn으로 이어 받으면 요청이 여러 번이 된다
@@ -155,7 +163,7 @@ class ChatService(
         val startedAt = System.nanoTime()
         try {
             while (true) {
-                val result = streamOnce(params, usage, sources, prepared.conversationId) { delta ->
+                val result = streamOnce(params, usage, sources, searchResults, prepared.conversationId) { delta ->
                     text.append(delta)
                     emit(ChatEvent.Delta(delta))
                 }
@@ -213,8 +221,14 @@ class ChatService(
             )
         )
 
-        if (text.isNotBlank() && sources.isNotEmpty()) {
-            val footer = sourcesFooter(sources.values)
+        // 동적 필터링 검색은 코드로 결과를 걸러 쓰느라 인용 없이 답할 때가 있다. 그때는 검색한 페이지를 대신 보여 준다
+        val footer = when {
+            text.isBlank() -> null
+            sources.isNotEmpty() -> sourcesFooter("출처", sources.values.take(MAX_SOURCES))
+            searchResults.isNotEmpty() -> sourcesFooter("검색한 페이지", searchResults.values.take(MAX_SEARCH_RESULT_SOURCES))
+            else -> null
+        }
+        if (footer != null) {
             text.append(footer)
             emit(ChatEvent.Delta(footer))
         }
@@ -280,11 +294,25 @@ class ChatService(
         params: MessageCreateParams,
         usage: UsageTotals,
         sources: MutableMap<String, Source>,
+        searchResults: MutableMap<String, Source>,
         conversationId: UUID,
         onText: (String) -> Unit,
     ): StreamResult {
         val accumulator = MessageAccumulator.create()
         var accumulating = true
+        // 모으기에 실패해도 답변은 계속 받는다. 이어 받기만 못 하게 된다
+        fun accumulate(event: RawMessageStreamEvent) {
+            if (!accumulating) return
+            try {
+                accumulator.accumulate(event)
+            } catch (e: Exception) {
+                accumulating = false
+                log.warn("conversation {} could not accumulate stream, pause_turn continuation disabled: {}", conversationId, e.toString())
+            }
+        }
+        // 입력 조각(input_json_delta)을 아직 받지 못한 도구 블록의 시작 입력. 조각 없이 끝나면 이 입력으로 대신한다
+        val pendingToolInputs = mutableMapOf<Long, JsonValue>()
+        val blocks = mutableListOf<String>()
         var stopReason: StopReason? = null
         // 입력 토큰은 message_start에, 출력 토큰·도구 사용 횟수는 message_delta에 누적값으로 온다
         var input: Long? = null
@@ -296,26 +324,32 @@ class ChatService(
         try {
             client.messages().createStreaming(params).use { response ->
                 response.stream().forEach { event ->
-                    // 모으기에 실패해도 답변은 계속 받는다. 이어 받기만 못 하게 된다
-                    if (accumulating) {
-                        try {
-                            accumulator.accumulate(event)
-                        } catch (e: Exception) {
-                            accumulating = false
-                            log.warn("conversation {} could not accumulate stream, pause_turn continuation disabled: {}", conversationId, e.toString())
-                        }
+                    // MessageAccumulator는 도구 블록에 입력 조각이 하나도 없으면 실패한다.
+                    // 동적 필터링 웹 검색은 서버 도구 블록을 조각 없이 보내므로, 시작 때 받은 입력을 조각으로 넣어 준다
+                    event.contentBlockStop().ifPresent { stop ->
+                        pendingToolInputs.remove(stop.index())?.let { accumulate(inputJsonDelta(stop.index(), it)) }
                     }
+                    accumulate(event)
                     event.messageStart().ifPresent {
                         val u = it.message().usage()
                         input = u.inputTokens()
                         cacheRead = u.cacheReadInputTokens().orElse(null)
                         cacheCreation = u.cacheCreationInputTokens().orElse(null)
                     }
-                    event.contentBlockStart()
-                        .flatMap { it.contentBlock().webFetchToolResult() }
-                        .flatMap { it.content().webFetchBlock() }
-                        .ifPresent { sources.putIfAbsent(it.url(), Source(it.url(), it.content().title().orElse(null))) }
+                    event.contentBlockStart().ifPresent { start ->
+                        val block = start.contentBlock()
+                        blocks += blockLabel(block)
+                        block.toolUse().ifPresent { pendingToolInputs[start.index()] = it._input() }
+                        block.serverToolUse().ifPresent { pendingToolInputs[start.index()] = it._input() }
+                        block.webFetchToolResult()
+                            .flatMap { it.content().webFetchBlock() }
+                            .ifPresent { sources.putIfAbsent(it.url(), Source(it.url(), it.content().title().orElse(null))) }
+                        block.webSearchToolResult()
+                            .flatMap { it.content().resultBlocks() }
+                            .ifPresent { results -> results.forEach { searchResults.putIfAbsent(it.url(), Source(it.url(), it.title())) } }
+                    }
                     event.contentBlockDelta().ifPresent { blockDelta ->
+                        if (blockDelta.delta().isInputJson()) pendingToolInputs.remove(blockDelta.index())
                         blockDelta.delta().text().ifPresent { onText(it.text()) }
                         blockDelta.delta().citations()
                             .flatMap { it.citation().webSearchResultLocation() }
@@ -332,6 +366,7 @@ class ChatService(
                 }
             }
         } finally {
+            blockLog.debug("conversation {} stop_reason={} blocks={}", conversationId, stopReason, blocks)
             usage.inputTokens = usage.inputTokens.plus(input)
             usage.cacheReadTokens = usage.cacheReadTokens.plus(cacheRead)
             usage.cacheCreationTokens = usage.cacheCreationTokens.plus(cacheCreation)
@@ -348,9 +383,41 @@ class ChatService(
         return StreamResult(stopReason, message)
     }
 
+    /** 시작 때 받은 도구 입력 전체를 조각 하나로 만든 이벤트 */
+    private fun inputJsonDelta(index: Long, input: JsonValue): RawMessageStreamEvent {
+        val partialJson = jsonMapper().writeValueAsString(input).takeUnless { it == "null" } ?: "{}"
+        return jsonMapper().readValue(
+            """{"type":"content_block_delta","index":$index,"delta":{"type":"input_json_delta","partial_json":${jsonMapper().writeValueAsString(partialJson)}}}""",
+            RawMessageStreamEvent::class.java,
+        )
+    }
+
+    /** 진단용 블록 이름. 실제 응답 형태가 바뀌었을 때 chat.blocks 로그로 확인한다 */
+    private fun blockLabel(block: RawContentBlockStartEvent.ContentBlock): String = when {
+        block.isText() -> "text"
+        block.isThinking() -> "thinking"
+        block.isRedactedThinking() -> "redacted_thinking"
+        block.isToolUse() -> "tool_use:" + block.asToolUse().name()
+        block.isServerToolUse() -> "server_tool_use:" + block.asServerToolUse().name()
+        block.isWebSearchToolResult() -> block.asWebSearchToolResult().content().let { content ->
+            "web_search_tool_result:" + (content.resultBlocks().map { "${it.size}" }.orElse(null) ?: content.error().map { "error=${it.errorCode()}" }.orElse("?"))
+        }
+        block.isWebFetchToolResult() -> "web_fetch_tool_result"
+        block.isCodeExecutionToolResult() -> block.asCodeExecutionToolResult().content().let { content ->
+            "code_execution_tool_result:" + when {
+                content.isError() -> "error=${content.asError().errorCode()}"
+                content.isResultBlock() -> "rc=${content.asResultBlock().returnCode()}"
+                else -> "encrypted"
+            }
+        }
+        block.isBashCodeExecutionToolResult() -> "bash_code_execution_tool_result"
+        block.isTextEditorCodeExecutionToolResult() -> "text_editor_code_execution_tool_result"
+        else -> "other"
+    }
+
     /** 답변 끝에 붙이는 출처 목록. 웹 검색 결과를 보여줄 때는 출처를 함께 표시해야 한다 */
-    private fun sourcesFooter(sources: Collection<Source>): String =
-        sources.take(MAX_SOURCES).joinToString("\n", prefix = "\n\n**출처**\n") { source ->
+    private fun sourcesFooter(heading: String, sources: Collection<Source>): String =
+        sources.joinToString("\n", prefix = "\n\n**$heading**\n") { source ->
             val title = (source.title?.takeIf { it.isNotBlank() } ?: source.url)
                 .replace("[", "(").replace("]", ")")
             "- [$title](${source.url})"
