@@ -40,12 +40,13 @@ class ChatStreamScript {
         add("""{"type":"content_block_stop","index":$i}""")
     }
 
-    fun webSearch(query: String, resultUrl: String = "https://example.com/result") {
-        val id = serverToolUse("web_search", """{\"query\":\"$query\"}""")
+    /** inputDelta=false면 동적 필터링 검색처럼 입력 조각 없이 시작 블록에 입력을 담아 보낸다 */
+    fun webSearch(query: String, resultUrl: String = "https://example.com/result", title: String = "검색 결과", inputDelta: Boolean = true) {
+        val id = serverToolUse("web_search", """{\"query\":\"$query\"}""", inputDelta)
         val i = index++
         add(
             """{"type":"content_block_start","index":$i,"content_block":{"type":"web_search_tool_result","tool_use_id":"$id",
-            "content":[{"type":"web_search_result","url":"$resultUrl","title":"검색 결과","encrypted_content":"enc","page_age":null}]}}"""
+            "content":[{"type":"web_search_result","url":"$resultUrl","title":"$title","encrypted_content":"enc","page_age":null}]}}"""
         )
         add("""{"type":"content_block_stop","index":$i}""")
     }
@@ -80,11 +81,16 @@ class ChatStreamScript {
         add("""{"type":"message_stop"}""")
     }
 
-    private fun serverToolUse(name: String, inputJson: String): String {
+    private fun serverToolUse(name: String, inputJson: String, inputDelta: Boolean = true): String {
         val id = "srvtoolu_${toolId++}"
         val i = index++
-        add("""{"type":"content_block_start","index":$i,"content_block":{"type":"server_tool_use","id":"$id","name":"$name","input":{}}}""")
-        add("""{"type":"content_block_delta","index":$i,"delta":{"type":"input_json_delta","partial_json":"$inputJson"}}""")
+        if (inputDelta) {
+            add("""{"type":"content_block_start","index":$i,"content_block":{"type":"server_tool_use","id":"$id","name":"$name","input":{}}}""")
+            add("""{"type":"content_block_delta","index":$i,"delta":{"type":"input_json_delta","partial_json":"$inputJson"}}""")
+        } else {
+            val input = inputJson.replace("\\\"", "\"")
+            add("""{"type":"content_block_start","index":$i,"content_block":{"type":"server_tool_use","id":"$id","name":"$name","input":$input}}""")
+        }
         add("""{"type":"content_block_stop","index":$i}""")
         return id
     }
