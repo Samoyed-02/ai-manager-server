@@ -20,6 +20,7 @@ import org.springframework.http.MediaType
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import java.util.stream.Stream
 
@@ -35,6 +36,8 @@ class ChatControllerTest {
     @Autowired lateinit var mvc: MockMvc
     @Autowired lateinit var testAuth: TestAuth
     @Autowired lateinit var jdbc: JdbcClient
+    @Autowired lateinit var conversations: ConversationRepository
+    @Autowired lateinit var messages: ChatMessageRepository
 
     private val messageService: MessageService = mock(MessageService::class.java)
 
@@ -87,5 +90,20 @@ class ChatControllerTest {
             { assertTrue(body.indexOf("event:task") in 0 until body.indexOf("event:done"), body) },
             { assertTrue(Regex(""""taskId":"[0-9a-f-]{36}","instruction":"보고서 초안"""").containsMatchIn(body), body) },
         )
+    }
+
+    @Test
+    fun `메시지 목록에 답변에서 실행한 작업이 함께 온다`() {
+        val conversation = conversations.save(Conversation(title = "기록"))
+        messages.save(ChatMessage(conversation.id, "user", "30분 달렸어"))
+        messages.save(ChatMessage(conversation.id, "assistant", "기록했어요", actions = "활동 기록: 달리기 30분\n웹 검색 1회"))
+
+        mvc.get("/conversations/${conversation.id}/messages") { header("Authorization", testAuth.bearer) }
+            .andExpect {
+                status { isOk() }
+                jsonPath("$[0].actions.length()") { value(0) }
+                jsonPath("$[1].actions[0]") { value("활동 기록: 달리기 30분") }
+                jsonPath("$[1].actions[1]") { value("웹 검색 1회") }
+            }
     }
 }
