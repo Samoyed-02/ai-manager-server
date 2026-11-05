@@ -72,7 +72,7 @@ class VoiceCallApiTest {
     }
 
     @Test
-    fun `발화가 없거나 역할이 잘못되면 400`() {
+    fun `발화가 없거나 역할이나 내용이 잘못되면 400`() {
         post("""{"startedAt":"2026-11-03T12:30:00Z","turns":[]}""").andExpect {
             status { isBadRequest() }
             jsonPath("$.fields.turns") { exists() }
@@ -80,6 +80,10 @@ class VoiceCallApiTest {
         post("""{"startedAt":"2026-11-03T12:30:00Z","turns":[{"role":"system","text":"x"}]}""").andExpect {
             status { isBadRequest() }
             jsonPath("$.fields['turns[0].role']") { exists() }
+        }
+        post("""{"startedAt":"2026-11-03T12:30:00Z","turns":[{"role":"user","text":"안녕"},{"role":"assistant","text":" "}]}""").andExpect {
+            status { isBadRequest() }
+            jsonPath("$.fields['turns[1].text']") { exists() }
         }
         assertEquals(0, conversations.count())
     }

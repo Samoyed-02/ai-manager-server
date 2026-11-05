@@ -52,6 +52,8 @@ springBoot {
 kotlin {
 	compilerOptions {
 		freeCompilerArgs.addAll("-Xjsr305=strict", "-Xannotation-default-target=param-property")
+		// List<@Valid T>처럼 타입 인자에 붙인 어노테이션을 바이트코드에 남긴다. 없으면 목록 원소 검사가 조용히 빠진다
+		freeCompilerArgs.add("-Xemit-jvm-type-annotations")
 	}
 }
 

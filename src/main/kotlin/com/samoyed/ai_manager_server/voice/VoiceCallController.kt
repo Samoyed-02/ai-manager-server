@@ -34,8 +34,7 @@ data class VoiceCallRequest(
     val endedAt: OffsetDateTime? = null,
 
     @field:Size(min = 1, max = MAX_CALL_TURNS, message = "발화는 {min}~{max}개여야 합니다")
-    @field:Valid
-    val turns: List<VoiceTurn>,
+    val turns: List<@Valid VoiceTurn>,
 )
 
 data class VoiceCallResponse(val conversationId: UUID)
