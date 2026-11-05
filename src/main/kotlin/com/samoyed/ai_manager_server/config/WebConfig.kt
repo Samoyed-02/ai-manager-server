@@ -20,8 +20,8 @@ import java.util.concurrent.atomic.AtomicLong
 /** 인증 필터가 요청에 붙여 두는 현재 세션 id. 예전 패스코드로 들어온 요청에는 없다 */
 const val SESSION_ATTRIBUTE = "authSessionId"
 
-/** 인증 없이 열어 두는 경로 */
-private val PUBLIC_PATHS = setOf("/auth/login")
+/** 인증 없이 열어 두는 경로. 헬스체크는 상태(UP/DOWN)만 돌려준다 */
+private val PUBLIC_PATHS = setOf("/auth/login", "/actuator/health")
 
 @Configuration
 class WebConfig(
@@ -80,7 +80,7 @@ class WebConfig(
     }
 
     /**
-     * Authorization: Bearer <세션 토큰>을 확인한다. /auth/login과 CORS preflight만 인증 없이 통과한다.
+     * Authorization: Bearer <세션 토큰>을 확인한다. /auth/login, 헬스체크, CORS preflight만 인증 없이 통과한다.
      * 전환 기간에는 APP_PASSCODE가 있을 때만 예전 X-App-Passcode도 받는다
      */
     @Bean

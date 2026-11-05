@@ -20,6 +20,8 @@ repositories {
 }
 
 dependencies {
+	// 배포 플랫폼의 헬스체크용. /actuator/health만 연다 (application.yml)
+	implementation("org.springframework.boot:spring-boot-starter-actuator")
 	implementation("org.springframework.boot:spring-boot-starter-data-jpa")
 	implementation("org.springframework.boot:spring-boot-starter-flyway")
 	implementation("org.springframework.boot:spring-boot-starter-validation")
