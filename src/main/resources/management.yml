@@ -1,0 +1,13 @@
+# 헬스체크만 연다. 인증 없이 열리므로 상태(UP/DOWN) 말고는 내보내지 않는다. DB 연결 검사가 포함된다
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
+      # 쿠버네티스용 liveness·readiness 그룹은 쓰지 않는다
+      probes:
+        enabled: false
