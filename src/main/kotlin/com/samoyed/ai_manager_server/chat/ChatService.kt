@@ -64,7 +64,7 @@ private const val MAX_CONTINUATIONS = 3
 /** 우리 서버가 실행하는 도구의 결과를 돌려주고 이어 받는 최대 횟수. 목록을 본 뒤 수정하는 식으로 연달아 쓸 수 있게 한다 */
 private const val MAX_TOOL_ROUNDS = 4
 private const val MAX_SOURCES = 10
-/** 인용이 하나도 없을 때 대신 보여 줄 검색 결과 수 */
+/** 인용이 하나도 없을 때 대신 보여 줄 검색 결과의 최대 수 */
 private const val MAX_SEARCH_RESULT_SOURCES = 5
 
 private val WEB_TOOLS = listOf(
@@ -81,9 +81,6 @@ private val WEB_TOOLS = listOf(
             .build()
     ),
 )
-
-/** 웹 검색 인용이나 읽은 페이지. 사용자에게 보여줄 때 출처를 함께 표시해야 한다 */
-private data class Source(val url: String, val title: String?)
 
 /** prepare()가 저장한 상태. 응답이 실패하면 이 정보로 사용자 메시지를 되돌린다 */
 data class PreparedChat(
@@ -236,11 +233,12 @@ class ChatService(
             )
         )
 
-        // 동적 필터링 검색은 코드로 결과를 걸러 쓰느라 인용 없이 답할 때가 있다. 그때는 검색한 페이지를 대신 보여 준다
+        // 동적 필터링 검색은 코드로 결과를 걸러 쓰느라 인용 없이 답할 때가 있다. 그때는 검색한 페이지 중 답변과 겹치는 것을 대신 보여 준다
         val footer = when {
             text.isBlank() -> null
             sources.isNotEmpty() -> sourcesFooter("출처", sources.values.take(MAX_SOURCES))
-            searchResults.isNotEmpty() -> sourcesFooter("검색한 페이지", searchResults.values.take(MAX_SEARCH_RESULT_SOURCES))
+            searchResults.isNotEmpty() ->
+                sourcesFooter("검색한 페이지", pickSearchResults(text.toString(), searchResults.values, MAX_SEARCH_RESULT_SOURCES))
             else -> null
         }
         if (footer != null) {
