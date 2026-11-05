@@ -37,6 +37,7 @@ private const val SYSTEM_PROMPT = """
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
 최신 정보나 사실 확인이 필요할 때만 웹 검색을 쓰고, 일반 지식이나 대화 내용만으로 답할 수 있으면 검색하지 마.
 검색은 질문당 6번까지야. 한도에 걸리면 이미 찾은 결과로 답하고, 확인하지 못한 부분만 말해.
+웹 검색이나 코드 실행 전에는 글을 쓰지 말고, 결과를 다 본 뒤 한 번에 답해.
 출처와 링크는 답변 끝에 자동으로 붙어. 답변에서는 링크를 쓰거나 출처를 어떻게 붙이는지 설명하지 마.
 말로 요청한 일은 도구로 처리해: 긴 문서 작성은 create_task, "기억해"는 save_memory, 반복 알림·브리핑은 루틴 도구, 한 일은 log_activity.
 도구로 처리했으면 무엇을 했는지 짧게 알려 주고, 삭제처럼 되돌릴 수 없는 일은 먼저 확인받아.
@@ -172,12 +173,13 @@ class ChatService(
         val toolContext = ToolContext(ConversationChannel.CHAT, prepared.conversationId)
         var params = buildParams(prepared)
         val startedAt = System.nanoTime()
+        val output = InterimTextFilter { delta ->
+            text.append(delta)
+            emit(ChatEvent.Delta(delta))
+        }
         try {
             while (true) {
-                val result = streamOnce(params, usage, sources, searchResults, prepared.conversationId) { delta ->
-                    text.append(delta)
-                    emit(ChatEvent.Delta(delta))
-                }
+                val result = streamOnce(params, usage, sources, searchResults, prepared.conversationId, output)
                 stopReason = result.stopReason
                 // 이어 보낼 때는 받은 응답(thinking·도구 블록 포함)을 바꾸지 않고 그대로 붙인다
                 val message = result.message ?: break
@@ -221,6 +223,8 @@ class ChatService(
             log.error("conversation {} streaming failed", prepared.conversationId, e)
             failure = e
         }
+        // 실패로 끊긴 응답의 모아 둔 텍스트도 보낸다. 받은 데까지 INTERRUPTED로 저장된다
+        output.responseEnd()
         logClaudeCall(
             ClaudeCall(
                 kind = "chat", id = prepared.conversationId, model = model, stopReason = stopReason,
@@ -300,7 +304,7 @@ class ChatService(
     private fun Long?.plus(n: Long?): Long? = if (this == null && n == null) null else (this ?: 0) + (n ?: 0)
 
     /**
-     * 요청 한 번을 스트리밍한다. 텍스트 조각은 onText로 넘기고, 출처와 사용량을 모은다.
+     * 요청 한 번을 스트리밍한다. 텍스트 조각은 textFilter로 넘겨 서버 도구 앞의 진행 문장을 거르고, 출처와 사용량을 모은다.
      * pause_turn이면 이어 보내야 하므로 응답 전체를 MessageAccumulator로 모아 돌려준다.
      */
     private fun streamOnce(
@@ -309,7 +313,7 @@ class ChatService(
         sources: MutableMap<String, Source>,
         searchResults: MutableMap<String, Source>,
         conversationId: UUID,
-        onText: (String) -> Unit,
+        textFilter: InterimTextFilter,
     ): StreamResult {
         val accumulator = MessageAccumulator.create()
         var accumulating = true
@@ -326,6 +330,9 @@ class ChatService(
         // 입력 조각(input_json_delta)을 아직 받지 못한 도구 블록의 시작 입력. 조각 없이 끝나면 이 입력으로 대신한다
         val pendingToolInputs = mutableMapOf<Long, JsonValue>()
         val blocks = mutableListOf<String>()
+        // 진단 로그에 텍스트 블록의 길이와 버림 여부를 남긴다
+        var textLabel = -1
+        var textLength = 0
         var stopReason: StopReason? = null
         // 입력 토큰은 message_start에, 출력 토큰·도구 사용 횟수는 message_delta에 누적값으로 온다
         var input: Long? = null
@@ -351,6 +358,16 @@ class ChatService(
                     }
                     event.contentBlockStart().ifPresent { start ->
                         val block = start.contentBlock()
+                        if (textLabel >= 0) blocks[textLabel] = "text:$textLength"
+                        textLabel = -1
+                        when {
+                            block.isText() -> { textFilter.textStart(); textLabel = blocks.size; textLength = 0 }
+                            block.isToolUse() || block.isServerToolUse() ->
+                                textFilter.toolStart(serverTool = block.isServerToolUse())?.let { dropped ->
+                                    blocks[blocks.size - 1] = "text:$dropped:dropped"
+                                }
+                            else -> textFilter.otherStart()
+                        }
                         blocks += blockLabel(block)
                         block.toolUse().ifPresent { pendingToolInputs[start.index()] = it._input() }
                         block.serverToolUse().ifPresent { pendingToolInputs[start.index()] = it._input() }
@@ -363,10 +380,10 @@ class ChatService(
                     }
                     event.contentBlockDelta().ifPresent { blockDelta ->
                         if (blockDelta.delta().isInputJson()) pendingToolInputs.remove(blockDelta.index())
-                        blockDelta.delta().text().ifPresent { onText(it.text()) }
+                        blockDelta.delta().text().ifPresent { textLength += it.text().length; textFilter.text(it.text()) }
                         blockDelta.delta().citations()
                             .flatMap { it.citation().webSearchResultLocation() }
-                            .ifPresent { sources.putIfAbsent(it.url(), Source(it.url(), it.title().orElse(null))) }
+                            .ifPresent { textFilter.cited(); sources.putIfAbsent(it.url(), Source(it.url(), it.title().orElse(null))) }
                     }
                     event.messageDelta().ifPresent {
                         it.delta().stopReason().ifPresent { reason -> stopReason = reason }
@@ -378,7 +395,9 @@ class ChatService(
                     }
                 }
             }
+            textFilter.responseEnd()
         } finally {
+            if (textLabel >= 0) blocks[textLabel] = "text:$textLength"
             blockLog.debug("conversation {} stop_reason={} blocks={}", conversationId, stopReason, blocks)
             usage.inputTokens = usage.inputTokens.plus(input)
             usage.cacheReadTokens = usage.cacheReadTokens.plus(cacheRead)
