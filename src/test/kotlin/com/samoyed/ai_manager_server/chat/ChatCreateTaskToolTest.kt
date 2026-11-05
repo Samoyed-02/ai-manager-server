@@ -194,7 +194,8 @@ class ChatCreateTaskToolTest {
         assertAll(
             // 첫 요청 + 도구 결과를 돌려주며 이어 받기 4번
             { assertEquals(5, sent.size) },
-            { assertEquals("1.2.3.4.5.", lastAssistant(prepared.conversationId).content) },
+            // 우리 서버 도구 앞의 문장은 남기고, 도구를 사이에 둔 텍스트는 빈 줄로 나눈다
+            { assertEquals("1.\n\n2.\n\n3.\n\n4.\n\n5.", lastAssistant(prepared.conversationId).content) },
             { assertEquals(MessageStatus.TRUNCATED, lastAssistant(prepared.conversationId).status) },
         )
     }

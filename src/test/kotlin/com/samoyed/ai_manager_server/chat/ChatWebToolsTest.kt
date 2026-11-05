@@ -105,7 +105,7 @@ class ChatWebToolsTest {
     fun `pause_turn이면 받은 응답을 그대로 붙여 이어 받는다`() {
         val prepared = chat.prepare(null, "자세히 조사해줘")
         val sent = messageService.streamsInOrder(
-            chatStream { start(inputTokens = 100); text("앞부분."); webSearch("조사"); end("pause_turn", outputTokens = 20, searches = 1) },
+            chatStream { start(inputTokens = 100); webSearch("조사"); text("앞부분."); end("pause_turn", outputTokens = 20, searches = 1) },
             chatStream { start(inputTokens = 300); text(" 뒷부분."); end("end_turn", outputTokens = 30, searches = 1) },
         )
 
@@ -173,7 +173,7 @@ class ChatWebToolsTest {
     @Test
     fun `이어 받기 한도를 넘기면 받은 만큼 TRUNCATED로 저장한다`() {
         val prepared = chat.prepare(null, "끝없이 조사해줘")
-        val paused = { n: Int -> chatStream { start(); text("$n."); webSearch("q$n"); end("pause_turn") } }
+        val paused = { n: Int -> chatStream { start(); webSearch("q$n"); text("$n."); end("pause_turn") } }
         val sent = messageService.streamsInOrder(paused(1), paused(2), paused(3), paused(4))
 
         chat.respond(prepared) { events += it }
@@ -181,10 +181,48 @@ class ChatWebToolsTest {
         assertAll(
             // 첫 요청 + 이어 받기 3번
             { assertEquals(4, sent.size) },
-            { assertEquals("1.2.3.4.", lastAssistant(prepared.conversationId).content.substringBefore("\n\n**")) },
+            { assertEquals("1.\n\n2.\n\n3.\n\n4.", lastAssistant(prepared.conversationId).content.substringBefore("\n\n**")) },
             { assertEquals(MessageStatus.TRUNCATED, lastAssistant(prepared.conversationId).status) },
             { assertEquals(ChatEvent.Done(MessageStatus.TRUNCATED), events.last()) },
         )
+    }
+
+    @Test
+    fun `검색 앞에 혼자 나온 짧은 문장은 보내지도 저장하지도 않는다`() {
+        val prepared = chat.prepare(null, "이번 주 뉴스")
+        messageService.streamsInOrder(chatStream {
+            start()
+            text("Results are a JSON string; parse it.")
+            webSearch("뉴스", inputDelta = false)
+            text("이번 주 뉴스입니다.")
+            end("end_turn", searches = 1)
+        })
+
+        chat.respond(prepared) { events += it }
+
+        val content = lastAssistant(prepared.conversationId).content
+        val streamed = events.filterIsInstance<ChatEvent.Delta>().joinToString("") { it.text }
+        assertAll(
+            { assertEquals("이번 주 뉴스입니다.", content.substringBefore("\n\n**")) },
+            { assertEquals(content, streamed) },
+        )
+    }
+
+    @Test
+    fun `검색 앞의 긴 텍스트는 남기고 검색 뒤 답변과 빈 줄로 나눈다`() {
+        val prepared = chat.prepare(null, "자세히 알려줘")
+        val long = "가".repeat(200)
+        messageService.streamsInOrder(chatStream {
+            start()
+            text(long)
+            webSearch("더 찾기", inputDelta = false)
+            text("추가로 찾은 내용입니다.")
+            end("end_turn", searches = 1)
+        })
+
+        chat.respond(prepared) { events += it }
+
+        assertEquals("$long\n\n추가로 찾은 내용입니다.", lastAssistant(prepared.conversationId).content.substringBefore("\n\n**"))
     }
 
     private fun lastAssistant(conversationId: UUID): ChatMessage =
