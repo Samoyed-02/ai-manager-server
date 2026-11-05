@@ -54,7 +54,7 @@ class ChatWebToolsTest {
         assertAll(
             // 웹 도구 2개 + 서버 도구 10개
             { assertEquals(12, tools.size) },
-            { assertEquals(3L, search.maxUses().get()) },
+            { assertEquals(6L, search.maxUses().get()) },
             { assertEquals("KR", search.userLocation().get().country().get()) },
             { assertEquals(3L, fetch.maxUses().get()) },
             { assertEquals(20_000L, fetch.maxContentTokens().get()) },
