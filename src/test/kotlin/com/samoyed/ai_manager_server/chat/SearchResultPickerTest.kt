@@ -54,6 +54,19 @@ class SearchResultPickerTest {
     }
 
     @Test
+    fun `제목이 겹쳐도 첫 화면과 검색 결과 페이지는 고르지 않는다`() {
+        val answer = "KB증권은 삼성전자와 SK하이닉스의 내년 합산 영업이익이 1000조원을 넘을 것으로 전망했습니다. 삼성전자 AI 투자도 이어집니다."
+        val results = listOf(
+            Source("https://news.samsung.com/kr/", "삼성전자 뉴스룸"),
+            Source("https://news.samsung.com/medialibrary/kr/search/AI?page=117", "삼성전자 AI 검색결과"),
+            Source("https://www.example.com/list?query=%EC%82%BC%EC%84%B1", "삼성전자 영업이익 검색"),
+            Source("https://hankyung.com/article/2026110442246", "삼전·닉스, 내년 영업익 1110조 전망…AI 우려 넘는다-KB"),
+        )
+
+        assertEquals(listOf("https://hankyung.com/article/2026110442246"), pickSearchResults(answer, results, 5).map { it.url })
+    }
+
+    @Test
     fun `통과한 페이지가 limit보다 많으면 limit개만 고른다`() {
         val results = (1..6).map { Source("https://news.example.com/$it", "서울 날씨 소식 $it") }
 
