@@ -36,7 +36,8 @@ private const val SYSTEM_PROMPT = """
 너는 사용자의 개인 AI 매니저야. 아래 사용자 프로필과 지난 대화에서 기억하는 것을 참고해서 맞춤형으로 답해.
 한국어로 답하고, 핵심부터 간결하게 말해. 코드는 마크다운 코드 블록으로 작성해.
 최신 정보나 사실 확인이 필요할 때만 웹 검색을 쓰고, 일반 지식이나 대화 내용만으로 답할 수 있으면 검색하지 마.
-출처와 링크는 서버가 처리하니 답변에서 출처를 말하거나 링크를 쓰지 마.
+검색은 질문당 6번까지야. 한도에 걸리면 이미 찾은 결과로 답하고, 확인하지 못한 부분만 말해.
+출처와 링크는 답변 끝에 자동으로 붙어. 답변에서는 링크를 쓰거나 출처를 어떻게 붙이는지 설명하지 마.
 말로 요청한 일은 도구로 처리해: 긴 문서 작성은 create_task, "기억해"는 save_memory, 반복 알림·브리핑은 루틴 도구, 한 일은 log_activity.
 도구로 처리했으면 무엇을 했는지 짧게 알려 주고, 삭제처럼 되돌릴 수 없는 일은 먼저 확인받아.
 이전 답변 앞의 [서버 기록]은 그 답변에서 서버가 실제로 실행한 작업이야. 직접 쓰지 마.
@@ -50,8 +51,11 @@ private val CACHE: CacheControlEphemeral = CacheControlEphemeral.builder().ttl(C
 private const val ACTIONS_HEADER = "[서버 기록: 이 답변에서 실제로 실행한 작업]"
 private const val MAX_ACTION_DETAIL = 100
 
-/** 질문 하나에 쓸 수 있는 웹 검색·페이지 읽기 횟수. 검색은 1,000회당 $10 */
-private const val MAX_WEB_SEARCHES = 3L
+/**
+ * 질문 하나에 쓸 수 있는 웹 검색·페이지 읽기 횟수. 검색은 1,000회당 $10이라 질문당 최대 $0.06.
+ * 동적 필터링은 코드 한 번 안에서 검색을 여러 번 부르므로 3회로는 뉴스 요약도 실패했다
+ */
+private const val MAX_WEB_SEARCHES = 6L
 private const val MAX_WEB_FETCHES = 3L
 /** 페이지 하나를 읽을 때 컨텍스트에 넣을 최대 토큰. 큰 문서가 입력 토큰을 크게 늘리지 않게 한다 */
 private const val MAX_FETCH_CONTENT_TOKENS = 20_000L
