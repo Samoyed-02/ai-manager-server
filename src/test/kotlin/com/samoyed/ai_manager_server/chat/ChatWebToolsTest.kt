@@ -152,19 +152,22 @@ class ChatWebToolsTest {
     }
 
     @Test
-    fun `인용이 없으면 검색한 페이지를 최대 5개 붙인다`() {
+    fun `인용이 없으면 검색한 페이지 중 답변과 겹치는 것을 붙인다`() {
         val prepared = chat.prepare(null, "요즘 소식")
         messageService.streamsInOrder(chatStream {
             start()
-            (1..6).forEach { webSearch("q$it", resultUrl = "https://news.example.com/$it", title = "기사 $it", inputDelta = false) }
-            text("요약입니다.")
-            end("end_turn", searches = 6)
+            webSearch("포털", resultUrl = "https://news.example.com/tech", title = "뉴스 홈", inputDelta = false)
+            webSearch("무관", resultUrl = "https://wiki.example.com/wiki/City_Hall", title = "City Hall", inputDelta = false)
+            webSearch("반도체", resultUrl = "https://news.example.com/1", title = "반도체 수출 사상 최대", inputDelta = false)
+            webSearch("해킹", resultUrl = "https://news.example.com/2", title = "금융사 해킹 잇따라", inputDelta = false)
+            text("반도체 수출이 사상 최대를 기록했고, 금융사 해킹이 잇따랐습니다.")
+            end("end_turn", searches = 4)
         })
 
         chat.respond(prepared) { events += it }
 
-        val expectedFooter = "\n\n**검색한 페이지**\n" + (1..5).joinToString("\n") { "- [기사 $it](https://news.example.com/$it)" }
-        assertEquals("요약입니다.$expectedFooter", lastAssistant(prepared.conversationId).content)
+        val expectedFooter = "\n\n**검색한 페이지**\n- [반도체 수출 사상 최대](https://news.example.com/1)\n- [금융사 해킹 잇따라](https://news.example.com/2)"
+        assertEquals("반도체 수출이 사상 최대를 기록했고, 금융사 해킹이 잇따랐습니다.$expectedFooter", lastAssistant(prepared.conversationId).content)
     }
 
     @Test
