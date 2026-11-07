@@ -95,7 +95,7 @@ SPRING_DATASOURCE_USERNAME=${{Postgres.PGUSER}}
 SPRING_DATASOURCE_PASSWORD=${{Postgres.PGPASSWORD}}
 ```
 
-DB 버전은 `select version();`으로 확인한다. 17이 아니면 2절을 따른다.
+DB 버전은 `select version();`으로 확인한다. 18이 아니면 2절을 따른다.
 
 **API 키 교체**
 
@@ -108,7 +108,10 @@ DB 버전은 `select version();`으로 확인한다. 17이 아니면 2절을 따
 
 기본값 `false`면 모든 요청이 프록시 IP로 보여 로그인 시도 제한이 한 묶음으로 집계된다. 배포 후 Railway가 이 헤더를 어떻게 다루는지 실제로 확인하고 정한다.
 
-1. `APP_TRUST_FORWARDED_FOR=true`로 재배포한다.
+1. `APP_TRUST_FORWARDED_FOR=true`로 재배포한다. 적용됐는지는 HTTPS 응답의 `Strict-Transport-Security` 헤더로 확인한다. 이 헤더는 설정이 `true`일 때만 붙는다.
+   ```sh
+   curl -s -o /dev/null -D - https://<server>/actuator/health | grep -i strict-transport-security
+   ```
 2. 위조한 헤더로 로그인 실패를 한 번 보낸다.
    ```sh
    curl -s -o /dev/null -w "%{http_code}\n" -H 'X-Forwarded-For: 203.0.113.9' -H 'Content-Type: application/json' \
@@ -117,3 +120,6 @@ DB 버전은 `select version();`으로 확인한다. 17이 아니면 2절을 따
 3. 로그의 로그인 실패 기록에 찍힌 IP를 본다.
    - `203.0.113.9`면 위조가 통한다. **`false`로 되돌린다.**
    - 내 실제 IP면 Railway가 헤더를 덮어쓰는 것이다. `true`로 둔다.
+   - `100.64.…`(Railway 내부 주소)면 설정이 아직 적용되지 않은 것이다. 1번의 헤더를 확인하고 다시 보낸다.
+
+2026-11-07 확인 결과 Railway는 헤더를 실제 접속 IP로 덮어썼다. 그래서 `true`로 둔다. Railway 앞에 Cloudflare 같은 프록시를 더 두면 헤더 처리가 달라지므로 다시 확인한다.
