@@ -28,7 +28,7 @@
 
 ## 2. DB
 
-- **버전:** Postgres 17. 다른 버전이면 `compose.yaml`과 `TestcontainersConfiguration`도 같은 메이저 버전으로 바꾼다.
+- **버전:** Postgres 18 (Railway 운영 18.6). 다른 버전이면 `compose.yaml`과 `TestcontainersConfiguration`도 같은 메이저 버전으로 바꾼다.
 - **백업:** 첫 배포 전에 백업한다. Flyway가 기동할 때 남은 마이그레이션(현재 V1~V10)을 자동으로 적용한다.
 - **V3 중복 문서 확인:** V3는 작업마다 가장 먼저 만들어진 문서만 남기고 나머지를 **삭제**한다. 기존 DB에 배포하기 전에 지워질 문서가 있는지 본다.
   ```sql
