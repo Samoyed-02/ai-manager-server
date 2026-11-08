@@ -3,6 +3,8 @@ package com.samoyed.ai_manager_server.auth
 import com.anthropic.client.AnthropicClient
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.assertAll
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Answers
@@ -10,14 +12,17 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 import org.springframework.context.annotation.Import
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.jdbc.core.simple.JdbcClient
+import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.ResultActionsDsl
 import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
+import org.springframework.web.server.ResponseStatusException
 import java.util.UUID
 
 /** 로그인(비밀번호 + 인증 앱 코드), 세션, 시도 제한 */
@@ -32,6 +37,7 @@ class AuthApiTest {
     @Autowired lateinit var mvc: MockMvc
     @Autowired lateinit var auth: AuthService
     @Autowired lateinit var jdbc: JdbcClient
+    @Autowired lateinit var controller: AuthController
 
     private val secret = Totp.decodeBase32("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
 
@@ -152,5 +158,19 @@ class AuthApiTest {
 
     private companion object {
         const val PASSWORD = "test-password-1234"
+    }
+
+    @Test
+    fun `세션 정보가 없는 요청은 세션 관리 API에서 403`() {
+        // HTTP로는 인증 필터가 먼저 401을 주므로, 필터 설정이 잘못된 경우를 컨트롤러를 직접 불러 확인한다
+        val noSession = MockHttpServletRequest()
+        fun status(call: () -> Unit) = assertThrows<ResponseStatusException> { call() }.statusCode
+
+        assertAll(
+            { assertEquals(HttpStatus.FORBIDDEN, status { controller.logout(noSession) }) },
+            { assertEquals(HttpStatus.FORBIDDEN, status { controller.sessions(noSession) }) },
+            { assertEquals(HttpStatus.FORBIDDEN, status { controller.revoke(UUID.randomUUID(), noSession) }) },
+            { assertEquals(HttpStatus.FORBIDDEN, status { controller.revokeOthers(noSession) }) },
+        )
     }
 }
