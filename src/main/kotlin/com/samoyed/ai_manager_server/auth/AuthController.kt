@@ -56,12 +56,13 @@ class AuthController(private val auth: AuthService, private val web: WebConfig) 
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     fun logout(http: HttpServletRequest) {
-        auth.revoke(currentSession(http), currentSession(http))
+        val session = currentSession(http)
+        auth.revoke(session, session)
     }
 
     @GetMapping("/sessions")
     fun sessions(http: HttpServletRequest): List<SessionDto> {
-        val current = http.getAttribute(SESSION_ATTRIBUTE) as UUID?
+        val current = currentSession(http)
         return auth.sessions().map { SessionDto(it.id, it.deviceName, it.createdAt, it.lastUsedAt, it.expiresAt, it.id == current) }
     }
 
@@ -69,7 +70,7 @@ class AuthController(private val auth: AuthService, private val web: WebConfig) 
     @DeleteMapping("/sessions/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     fun revoke(@PathVariable id: UUID, http: HttpServletRequest) {
-        if (!auth.revoke(id, http.getAttribute(SESSION_ATTRIBUTE) as UUID?)) throw ResponseStatusException(HttpStatus.NOT_FOUND)
+        if (!auth.revoke(id, currentSession(http))) throw ResponseStatusException(HttpStatus.NOT_FOUND)
     }
 
     /** 지금 기기를 뺀 모든 기기를 끊는다 */

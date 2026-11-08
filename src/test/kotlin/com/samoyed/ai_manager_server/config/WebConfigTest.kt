@@ -35,12 +35,6 @@ class WebConfigTest {
     }
 
     @Test
-    fun `예전 X-App-Passcode 헤더는 더 이상 받지 않는다`() {
-        mvc.get("/conversations") { header("X-App-Passcode", "test-passcode") }
-            .andExpect { status { isUnauthorized() } }
-    }
-
-    @Test
     fun `Bearer 토큰이 맞으면 통과`() {
         mvc.get("/conversations") { header("Authorization", testAuth.bearer) }
             .andExpect { status { isOk() } }
@@ -84,5 +78,23 @@ class WebConfigTest {
             header("Authorization", testAuth.bearer)
             secure = true
         }.andExpect { header { string("Strict-Transport-Security", "max-age=31536000") } }
+    }
+}
+
+/** 예전 설정(APP_PASSCODE)이 남아 있어도 X-App-Passcode 헤더로는 들어올 수 없다 */
+@SpringBootTest(properties = ["app.passcode=test-passcode"])
+@AutoConfigureMockMvc
+@Import(TestcontainersConfiguration::class)
+class LegacyPasscodeRemovedTest {
+
+    @MockitoBean(answers = Answers.RETURNS_SELF)
+    lateinit var client: AnthropicClient
+
+    @Autowired lateinit var mvc: MockMvc
+
+    @Test
+    fun `APP_PASSCODE가 설정돼 있어도 X-App-Passcode 헤더는 401`() {
+        mvc.get("/conversations") { header("X-App-Passcode", "test-passcode") }
+            .andExpect { status { isUnauthorized() } }
     }
 }

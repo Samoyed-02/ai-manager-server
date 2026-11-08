@@ -216,5 +216,5 @@ echo "  응답 블록 (chat.blocks):"
 docker logs "$APP" 2>&1 | grep 'blocks=' | sed 's/.*conversation /    /' || true
 echo
 echo "  오류·경고 로그:"
-docker logs "$APP" 2>&1 | grep -E ' (ERROR|WARN) ' | grep -v 'APP_PASSCODE' | tail -20 || true
+docker logs "$APP" 2>&1 | grep -E ' (ERROR|WARN) ' | tail -20 || true
 fi
