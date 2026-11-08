@@ -3,8 +3,6 @@ app:
   password-hash: $2a$12$8.uc9e/61ido.tn37R3Ikuhxz7zCPDt2TItf360LFCB7mpMsavju2
   # RFC 6238 테스트 비밀값 "12345678901234567890"
   totp-secret: GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
-  # 전환 기간의 예전 헤더 동작을 확인하려고 둔다 (WebConfigTest)
-  passcode: test-passcode
   allowed-origins: http://localhost:3000
   scheduling:
     enabled: false

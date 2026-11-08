@@ -140,7 +140,7 @@ class ToolApiTest {
     }
 
     @Test
-    fun `없는 도구는 404, 패스코드가 없으면 401`() {
+    fun `없는 도구는 404, 인증이 없으면 401`() {
         call("send_email", "{}").andExpect { status { isNotFound() } }
         mvc.get("/tools").andExpect { status { isUnauthorized() } }
     }

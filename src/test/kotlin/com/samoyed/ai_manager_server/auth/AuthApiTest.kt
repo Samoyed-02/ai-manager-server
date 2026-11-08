@@ -130,14 +130,11 @@ class AuthApiTest {
     }
 
     @Test
-    fun `토큰은 해시로만 저장하고, 예전 패스코드로는 세션 관리를 못 한다`() {
+    fun `토큰은 해시로만 저장한다`() {
         val issued = auth.issueSession("해시 확인")
         val stored = jdbc.sql("select token_hash from auth_sessions where id = :id").param("id", issued.sessionId).query(String::class.java).single()
         assertEquals(64, stored.length)
         assertEquals(false, stored.contains(issued.token))
-
-        mvc.get("/auth/sessions") { header("X-App-Passcode", "test-passcode") }.andExpect { status { isOk() } }
-        mvc.delete("/auth/sessions") { header("X-App-Passcode", "test-passcode") }.andExpect { status { isForbidden() } }
     }
 
     private fun currentCode(): String = Totp.code(secret, Totp.counterAt(System.currentTimeMillis() / 1000))
