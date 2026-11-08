@@ -76,7 +76,7 @@ class AuthController(private val auth: AuthService, private val web: WebConfig) 
     @DeleteMapping("/sessions")
     fun revokeOthers(http: HttpServletRequest): Map<String, Int> = mapOf("revoked" to auth.revokeOthers(currentSession(http)))
 
-    /** 예전 패스코드로 들어온 요청에는 세션이 없다. 세션 관리는 로그인한 기기에서만 한다 */
+    /** 인증 필터를 거친 요청에는 항상 세션이 있다. 없으면 필터 설정이 잘못된 것이므로 막는다 */
     private fun currentSession(http: HttpServletRequest): UUID =
         http.getAttribute(SESSION_ATTRIBUTE) as UUID? ?: throw ResponseStatusException(HttpStatus.FORBIDDEN, "로그인한 세션에서만 할 수 있습니다")
 }

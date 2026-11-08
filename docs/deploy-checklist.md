@@ -21,7 +21,6 @@
 | 변수 | 기본값 | 내용 |
 |---|---|---|
 | `PORT` | `8080` | 플랫폼이 포트를 정해 주면 그대로 쓴다 |
-| `APP_PASSCODE` | 없음 | **전환 기간용.** 설정돼 있을 때만 예전 `X-App-Passcode` 헤더를 받는다(쓰일 때 1분에 한 번 경고 로그). 클라이언트가 `/auth/login`으로 바뀌면 **지운다** |
 | `APP_TRUST_FORWARDED_FOR` | `false` | 앞단 프록시가 `X-Forwarded-For`를 덮어쓰는 환경에서만 `true`. 로그인 시도 제한과 감사 로그가 실제 IP를 쓰고, `X-Forwarded-Proto: https`면 HSTS를 붙인다. 프록시 없이 `true`로 두면 IP를 위조해 시도 제한을 피할 수 있다 |
 | `JAVA_TOOL_OPTIONS` | 없음 | `-XX:MaxRAMPercentage=75` 권장. 지정하지 않으면 JVM이 컨테이너 메모리의 25%만 힙으로 쓴다 |
 | `LOGGING_STRUCTURED_FORMAT_CONSOLE` | 없음 (텍스트 로그) | `ecs`로 두면 로그가 JSON 한 줄씩 나온다. Claude 사용량 로그(`claude.usage`)의 토큰 수 등이 별도 필드가 되어 로그 서비스에서 바로 집계할 수 있다 |

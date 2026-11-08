@@ -93,7 +93,7 @@ class MemoryApiTest {
     }
 
     @Test
-    fun `패스코드가 없으면 401`() {
+    fun `인증이 없으면 401`() {
         mvc.get("/memories").andExpect { status { isUnauthorized() } }
     }
 

@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestControllerAdvice
 
-/** 잘못된 요청은 {"error": "invalid_request", "fields": {...}} 형태로 돌려준다. 패스코드 필터의 401 응답과 같은 모양 */
+/** 잘못된 요청은 {"error": "invalid_request", "fields": {...}} 형태로 돌려준다. 인증 필터의 401 응답과 같은 모양 */
 data class InvalidRequestResponse(val error: String = "invalid_request", val fields: Map<String, String> = emptyMap())
 
 @RestControllerAdvice

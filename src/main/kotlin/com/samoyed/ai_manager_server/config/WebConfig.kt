@@ -4,7 +4,6 @@ import com.samoyed.ai_manager_server.auth.AuthService
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
-import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.web.servlet.FilterRegistrationBean
 import org.springframework.context.annotation.Bean
@@ -14,10 +13,8 @@ import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 import org.springframework.web.filter.CorsFilter
 import org.springframework.web.filter.OncePerRequestFilter
-import java.security.MessageDigest
-import java.util.concurrent.atomic.AtomicLong
 
-/** 인증 필터가 요청에 붙여 두는 현재 세션 id. 예전 패스코드로 들어온 요청에는 없다 */
+/** 인증 필터가 요청에 붙여 두는 현재 세션 id */
 const val SESSION_ATTRIBUTE = "authSessionId"
 
 /** 인증 없이 열어 두는 경로. 헬스체크는 상태(UP/DOWN)만 돌려준다 */
@@ -26,24 +23,10 @@ private val PUBLIC_PATHS = setOf("/auth/login", "/actuator/health")
 @Configuration
 class WebConfig(
     @Value("\${app.allowed-origins}") private val origins: String,
-    /** 전환 기간용. 비어 있으면 예전 X-App-Passcode 헤더는 받지 않는다 */
-    @Value("\${app.passcode:}") passcode: String,
     /** 앞단 프록시가 X-Forwarded-For를 덮어쓰는 환경에서만 true. 아니면 헤더를 위조해 시도 제한을 피할 수 있다 */
     @Value("\${app.trust-forwarded-for:false}") private val trustForwardedFor: Boolean,
     private val auth: AuthService,
 ) {
-    private val log = LoggerFactory.getLogger("auth")
-    private val expectedPasscode: ByteArray? = passcode.trim().takeIf { it.isNotEmpty() }?.toByteArray(Charsets.UTF_8)
-    private val lastLegacyWarning = AtomicLong(0)
-
-    init {
-        if (expectedPasscode != null) log.warn("APP_PASSCODE is set: legacy X-App-Passcode header is still accepted. Remove it once the client uses /auth/login")
-    }
-
-    /** 상수 시간 비교. 비교 시간은 입력 길이에만 좌우되어 일치하는 앞부분 길이나 정답 길이가 드러나지 않는다 */
-    private fun passcodeMatches(given: String?): Boolean =
-        expectedPasscode != null && given != null && MessageDigest.isEqual(given.toByteArray(Charsets.UTF_8), expectedPasscode)
-
     fun clientIp(req: HttpServletRequest): String =
         (if (trustForwardedFor) req.getHeader("X-Forwarded-For")?.split(",")?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() } else null)
             ?: req.remoteAddr
@@ -80,8 +63,7 @@ class WebConfig(
     }
 
     /**
-     * Authorization: Bearer <세션 토큰>을 확인한다. /auth/login, 헬스체크, CORS preflight만 인증 없이 통과한다.
-     * 전환 기간에는 APP_PASSCODE가 있을 때만 예전 X-App-Passcode도 받는다
+     * Authorization: Bearer <세션 토큰>을 확인한다. /auth/login, 헬스체크, CORS preflight만 인증 없이 통과한다
      */
     @Bean
     fun authFilter(): FilterRegistrationBean<OncePerRequestFilter> {
@@ -93,32 +75,16 @@ class WebConfig(
                 }
                 val bearer = req.getHeader("Authorization")?.takeIf { it.startsWith("Bearer ", ignoreCase = true) }?.substring(7)?.trim()
                 val sessionId = bearer?.let { auth.authenticate(it) }
-                when {
-                    sessionId != null -> {
-                        req.setAttribute(SESSION_ATTRIBUTE, sessionId)
-                        chain.doFilter(req, res)
-                    }
-                    bearer == null && passcodeMatches(req.getHeader("X-App-Passcode")) -> {
-                        warnLegacy(req)
-                        chain.doFilter(req, res)
-                    }
-                    else -> {
-                        res.status = 401
-                        res.contentType = "application/json"
-                        res.writer.write("""{"error":"unauthorized"}""")
-                    }
+                if (sessionId != null) {
+                    req.setAttribute(SESSION_ATTRIBUTE, sessionId)
+                    chain.doFilter(req, res)
+                } else {
+                    res.status = 401
+                    res.contentType = "application/json"
+                    res.writer.write("""{"error":"unauthorized"}""")
                 }
             }
         }
         return FilterRegistrationBean<OncePerRequestFilter>(filter).apply { order = Ordered.HIGHEST_PRECEDENCE + 2 }
-    }
-
-    /** 예전 헤더가 아직 쓰이는지 알 수 있게 하되 로그가 넘치지 않게 1분에 한 번만 */
-    private fun warnLegacy(req: HttpServletRequest) {
-        val now = System.currentTimeMillis()
-        val last = lastLegacyWarning.get()
-        if (now - last > 60_000 && lastLegacyWarning.compareAndSet(last, now)) {
-            log.warn("legacy X-App-Passcode used ip={} path={}", clientIp(req), req.requestURI)
-        }
     }
 }

@@ -100,7 +100,7 @@ class DeleteApiTest {
     }
 
     @Test
-    fun `패스코드가 없으면 지우지 않는다`() {
+    fun `인증이 없으면 지우지 않는다`() {
         val conversation = conversations.save(Conversation(title = "대화"))
 
         mvc.delete("/conversations/${conversation.id}").andExpect { status { isUnauthorized() } }
