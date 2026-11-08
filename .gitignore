@@ -44,3 +44,8 @@ out/
 
 ### Local scratch ###
 /Task
+
+### 비밀값 ###
+.env
+.env.*
+*.env
