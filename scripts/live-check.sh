@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 실제 Claude API로 주요 기능을 한 번씩 돌려 보는 점검.
-# 임시 Postgres 17과 실제 Docker 이미지를 띄우고, 새로 만든 테스트 비밀번호·TOTP로 로그인한다.
+# 임시 Postgres 18과 실제 Docker 이미지를 띄우고, 새로 만든 테스트 비밀번호·TOTP로 로그인한다.
 # 결과는 통과/실패가 아니라 사람이 읽을 요약으로 출력하고, 끝나면 컨테이너를 모두 지운다.
 #
 # 사용: scripts/live-check.sh <ANTHROPIC_API_KEY가 든 env 파일> [예산 달러, 기본 2]
@@ -72,7 +72,7 @@ SECRET=$($HELP new-secret)
 [ -n "$HASH" ] || { echo "비밀번호 해시를 만들지 못함"; exit 1; }
 
 docker network create "$NET" >/dev/null
-docker run -d --name "$DB" --network "$NET" -e POSTGRES_USER=live -e POSTGRES_PASSWORD=live -e POSTGRES_DB=live postgres:17 >/dev/null
+docker run -d --name "$DB" --network "$NET" -e POSTGRES_USER=live -e POSTGRES_PASSWORD=live -e POSTGRES_DB=live postgres:18 >/dev/null
 wait_for 60 "DB 준비" docker exec "$DB" pg_isready -U live -d live || exit 1
 docker run -d --name "$APP" --network "$NET" -p "$PORT:8080" --env-file "$ENV_FILE" \
   -e SPRING_DATASOURCE_URL="jdbc:postgresql://$DB:5432/live" -e SPRING_DATASOURCE_USERNAME=live -e SPRING_DATASOURCE_PASSWORD=live \
