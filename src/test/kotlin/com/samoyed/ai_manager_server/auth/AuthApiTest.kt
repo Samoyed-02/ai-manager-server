@@ -3,6 +3,7 @@ package com.samoyed.ai_manager_server.auth
 import com.anthropic.client.AnthropicClient
 import com.samoyed.ai_manager_server.TestcontainersConfiguration
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.assertAll
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.BeforeEach
@@ -106,6 +107,26 @@ class AuthApiTest {
         }
 
         login(PASSWORD, currentCode()).andExpect { status { isOk() } }
+    }
+
+    @Test
+    fun `같은 IP에서 동시에 틀린 로그인을 보내도 한도를 넘겨 검사하지 않는다`() {
+        val ip = "198.51.100.7"
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(10)
+        val results = try {
+            (1..10).map { pool.submit<LoginResult> { auth.login("wrong-password", "000000", "동시", ip) } }.map { it.get() }
+        } finally {
+            pool.shutdown()
+        }
+
+        val checked = results.count { it == LoginResult.InvalidCredentials }
+        val failures = jdbc.sql("select count(*) from login_attempts where ip = :ip and not success").param("ip", ip).query(Int::class.java).single()
+        assertAll(
+            { assertTrue(checked <= MAX_FAILURES_PER_IP, results.toString()) },
+            { assertEquals(10 - checked, results.count { it is LoginResult.Locked }) },
+            // 막힌 시도는 기록에서 지운다
+            { assertEquals(checked, failures) },
+        )
     }
 
     @Test

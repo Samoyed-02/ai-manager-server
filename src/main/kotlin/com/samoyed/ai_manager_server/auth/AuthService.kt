@@ -69,7 +69,11 @@ class AuthService(
     private fun now(): OffsetDateTime = OffsetDateTime.now()
 
     fun login(password: String, totpCode: String, deviceName: String, ip: String): LoginResult {
-        lockedFor(ip)?.let {
+        // 시도를 먼저 실패로 기록한 뒤 센다. 동시에 온 요청도 서로의 기록을 보므로, 한도를 넘는 시도가 검사까지 가지 않는다
+        val attemptId = recordAttempt(ip)
+        lockedFor(ip, exclude = attemptId)?.let {
+            // 막힌 시도는 세지 않는다. 세면 계속 두드리는 동안 잠금이 끝나지 않는다
+            jdbc.sql("delete from login_attempts where id = :id").param("id", attemptId).update()
             log.warn("login blocked ip={} retryAfter={}s", ip, it)
             return LoginResult.Locked(it)
         }
@@ -77,7 +81,7 @@ class AuthService(
         val passwordOk = encoder.matches(password, passwordHash)
         val counter = Totp.verify(totpKey, totpCode.trim(), now().toEpochSecond())
         val ok = passwordOk && counter != null && markTotpUsed(counter)
-        recordAttempt(ip, ok)
+        if (ok) jdbc.sql("update login_attempts set success = true where id = :id").param("id", attemptId).update()
         if (!ok) {
             log.warn("login failed ip={} device={}", ip, deviceName)
             return LoginResult.InvalidCredentials
@@ -150,24 +154,24 @@ class AuthService(
             .also { log.info("sessions revoked count={} by={}", it, current) }
 
     /** 막혀 있으면 남은 초 */
-    private fun lockedFor(ip: String): Long? {
+    private fun lockedFor(ip: String, exclude: Long): Long? {
         val failures = jdbc.sql(
             """
             select created_at from login_attempts
-             where not success and created_at > :since and ip = :ip
+             where not success and created_at > :since and ip = :ip and id <> :exclude
              order by created_at desc limit :limit
             """.trimIndent()
-        ).param("since", now().minus(LOCKOUT_WINDOW)).param("ip", ip).param("limit", MAX_FAILURES_PER_IP)
+        ).param("since", now().minus(LOCKOUT_WINDOW)).param("ip", ip.take(64)).param("exclude", exclude).param("limit", MAX_FAILURES_PER_IP)
             .query(OffsetDateTime::class.java).list().filterNotNull()
         // 최근 MAX_FAILURES_PER_IP번이 모두 창 안에 있으면, 그중 가장 오래된 실패가 창 밖으로 나갈 때 풀린다
         if (failures.size < MAX_FAILURES_PER_IP) return null
         return Duration.between(now(), failures.last().plus(LOCKOUT_WINDOW)).seconds.coerceAtLeast(1)
     }
 
-    private fun recordAttempt(ip: String, success: Boolean) {
-        jdbc.sql("insert into login_attempts (ip, success, created_at) values (:ip, :success, :now)")
-            .param("ip", ip.take(64)).param("success", success).param("now", now()).update()
-    }
+    /** 실패로 기록하고 id를 돌려준다. 성공하면 login()이 success로 바꾼다 */
+    private fun recordAttempt(ip: String): Long =
+        jdbc.sql("insert into login_attempts (ip, success, created_at) values (:ip, false, :now) returning id")
+            .param("ip", ip.take(64)).param("now", now()).query(Long::class.java).single()
 
     /** 같은 코드(counter)는 한 번만 쓸 수 있다. 이미 쓴 코드면 false */
     private fun markTotpUsed(counter: Long): Boolean =
