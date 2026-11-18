@@ -21,10 +21,12 @@ val SESSION_MAX: Duration = Duration.ofDays(90)
 /** last_used_at을 매 요청마다 쓰지 않도록 이 간격보다 오래됐을 때만 갱신한다 */
 private val TOUCH_INTERVAL: Duration = Duration.ofMinutes(5)
 
-/** 이 시간 안에 같은 IP에서 MAX_FAILURES_PER_IP번 실패하면 막는다. 전체 실패가 MAX_FAILURES_TOTAL번이면 모두 막는다 */
+/**
+ * 이 시간 안에 같은 IP에서 MAX_FAILURES_PER_IP번 실패하면 그 IP만 막는다.
+ * 전체 실패 수로는 막지 않는다. 남이 실패를 쌓아 본인 로그인까지 막을 수 있고, 비밀번호와 일회용 코드가 함께 필요해 분산 대입의 이득이 없다
+ */
 val LOCKOUT_WINDOW: Duration = Duration.ofMinutes(15)
 const val MAX_FAILURES_PER_IP = 5
-const val MAX_FAILURES_TOTAL = 50
 
 const val MAX_DEVICE_NAME = 100
 
@@ -149,22 +151,17 @@ class AuthService(
 
     /** 막혀 있으면 남은 초 */
     private fun lockedFor(ip: String): Long? {
-        val since = now().minus(LOCKOUT_WINDOW)
-        fun oldestFailure(byIp: Boolean, limit: Int): OffsetDateTime? {
-            val failures = jdbc.sql(
-                """
-                select created_at from login_attempts
-                 where not success and created_at > :since ${if (byIp) "and ip = :ip" else ""}
-                 order by created_at desc limit :limit
-                """.trimIndent()
-            ).param("since", since).param("limit", limit).apply { if (byIp) param("ip", ip) }
-                .query(OffsetDateTime::class.java).list()
-            // 최근 limit번이 모두 창 안에 있으면, 그중 가장 오래된 실패가 창 밖으로 나갈 때 풀린다
-            return if (failures.size >= limit) failures.last() else null
-        }
-        val blockedSince = listOfNotNull(oldestFailure(true, MAX_FAILURES_PER_IP), oldestFailure(false, MAX_FAILURES_TOTAL)).maxOrNull()
-            ?: return null
-        return Duration.between(now(), blockedSince.plus(LOCKOUT_WINDOW)).seconds.coerceAtLeast(1)
+        val failures = jdbc.sql(
+            """
+            select created_at from login_attempts
+             where not success and created_at > :since and ip = :ip
+             order by created_at desc limit :limit
+            """.trimIndent()
+        ).param("since", now().minus(LOCKOUT_WINDOW)).param("ip", ip).param("limit", MAX_FAILURES_PER_IP)
+            .query(OffsetDateTime::class.java).list().filterNotNull()
+        // 최근 MAX_FAILURES_PER_IP번이 모두 창 안에 있으면, 그중 가장 오래된 실패가 창 밖으로 나갈 때 풀린다
+        if (failures.size < MAX_FAILURES_PER_IP) return null
+        return Duration.between(now(), failures.last().plus(LOCKOUT_WINDOW)).seconds.coerceAtLeast(1)
     }
 
     private fun recordAttempt(ip: String, success: Boolean) {

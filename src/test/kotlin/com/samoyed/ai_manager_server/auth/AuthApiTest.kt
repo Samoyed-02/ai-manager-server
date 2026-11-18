@@ -97,6 +97,18 @@ class AuthApiTest {
     }
 
     @Test
+    fun `다른 IP들의 실패가 많이 쌓여도 새 IP의 로그인은 막지 않는다`() {
+        // 예전 전체 잠금(15분에 50번)을 넘기는 60건. 남이 실패를 쌓아 본인 로그인을 막을 수 없어야 한다
+        repeat(12) { i ->
+            repeat(MAX_FAILURES_PER_IP) {
+                jdbc.sql("insert into login_attempts (ip, success, created_at) values (:ip, false, now())").param("ip", "203.0.113.$i").update()
+            }
+        }
+
+        login(PASSWORD, currentCode()).andExpect { status { isOk() } }
+    }
+
+    @Test
     fun `로그아웃한 토큰과 끊은 기기의 토큰은 401`() {
         val phone = auth.issueSession("폰").token
         val laptop = auth.issueSession("노트북").token
