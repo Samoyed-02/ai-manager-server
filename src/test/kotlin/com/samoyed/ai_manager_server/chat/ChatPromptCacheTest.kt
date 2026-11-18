@@ -70,6 +70,20 @@ class ChatPromptCacheTest {
     }
 
     @Test
+    fun `질문의 민감 정보는 가려서 저장하고 Claude에도 가린 채 보낸다`() {
+        val prepared = chat.prepare(null, "카드 4111-1111-1111-1111 결제일 알려줘")
+        val sent = messageService.streamsInOrder(chatStream { start(); text("네"); end("end_turn") })
+        chat.respond(prepared) { }
+
+        val stored = jdbc.sql("select content from messages where role = 'user'").query(String::class.java).single()
+        assertAll(
+            { assertEquals("카드 [가림] 결제일 알려줘", stored) },
+            { assertEquals("카드 [가림] 결제일 알려줘", sent.single().messages()[0].text()) },
+            { assertFalse(sent.single().toString().contains("4111")) },
+        )
+    }
+
+    @Test
     fun `다음 턴 요청은 이전 요청의 캐시 지점까지 앞부분이 같다`() {
         val first = chat.prepare(null, "첫 질문")
         val firstRequests = messageService.streamsInOrder(chatStream { start(); text("첫 답"); end("end_turn") })

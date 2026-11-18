@@ -1,8 +1,10 @@
 package com.samoyed.ai_manager_server.memory
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.ValueSource
 
 class SensitiveInfoFilterTest {
@@ -44,5 +46,22 @@ class SensitiveInfoFilterTest {
     )
     fun `평범한 기억은 통과시킨다`(text: String) {
         assertFalse(SensitiveInfoFilter.isSensitive(text), text)
+    }
+
+    @ParameterizedTest
+    @CsvSource(
+        delimiter = '|',
+        value = [
+            "내 주민번호는 900101-1234567이야|내 주민번호는 [가림]이야",
+            "카드 4111-1111-1111-1111로 결제해|카드 [가림]로 결제해",
+            "계좌 110-123-456789로 보내 줘|계좌 [가림]로 보내 줘",
+            "엄마 번호 010-1234-5678 저장해|엄마 번호 [가림] 저장해",
+            "와이파이 비번은 qwer1234 이고 내일 바꿀 거야|와이파이 [가림] 이고 내일 바꿀 거야",
+            "키는 sk-ant-api03-abcdefghijklmnopqrstuv 야|키는 [가림] 야",
+            "2026-12-01까지 3시간씩 공부할래|2026-12-01까지 3시간씩 공부할래",
+        ],
+    )
+    fun `민감한 부분만 가리고 나머지 문장은 남긴다`(text: String, expected: String) {
+        assertEquals(expected, SensitiveInfoFilter.redact(text))
     }
 }
