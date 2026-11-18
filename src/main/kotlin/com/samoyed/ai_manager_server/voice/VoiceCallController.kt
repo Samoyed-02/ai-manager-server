@@ -5,6 +5,7 @@ import com.samoyed.ai_manager_server.chat.ChatMessageRepository
 import com.samoyed.ai_manager_server.chat.Conversation
 import com.samoyed.ai_manager_server.chat.ConversationChannel
 import com.samoyed.ai_manager_server.chat.ConversationRepository
+import com.samoyed.ai_manager_server.memory.SensitiveInfoFilter
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Pattern
@@ -57,7 +58,7 @@ class VoiceCallController(
         val title = req.startedAt.atZoneSameInstant(ZoneId.of("Asia/Seoul")).format(titleFormat)
         val conversation = tx.execute {
             val conversation = conversations.save(Conversation(title = title, channel = ConversationChannel.VOICE))
-            messages.saveAll(req.turns.map { ChatMessage(conversation.id, it.role, it.text.trim()) })
+            messages.saveAll(req.turns.map { ChatMessage(conversation.id, it.role, SensitiveInfoFilter.redact(it.text.trim())) })
             conversation
         }!!
         return VoiceCallResponse(conversation.id)

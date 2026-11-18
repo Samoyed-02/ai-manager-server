@@ -30,6 +30,7 @@ import com.samoyed.ai_manager_server.claude.ClaudeCall
 import com.samoyed.ai_manager_server.claude.classifyClaudeError
 import com.samoyed.ai_manager_server.claude.elapsedMs
 import com.samoyed.ai_manager_server.claude.logClaudeCall
+import com.samoyed.ai_manager_server.memory.SensitiveInfoFilter
 import com.samoyed.ai_manager_server.profile.ContextService
 
 private const val SYSTEM_PROMPT = """
@@ -126,7 +127,9 @@ class ChatService(
     private val log = LoggerFactory.getLogger(javaClass)
     private val blockLog = LoggerFactory.getLogger("chat.blocks")
 
-    fun prepare(conversationId: UUID?, userText: String): PreparedChat {
+    fun prepare(conversationId: UUID?, rawText: String): PreparedChat {
+        // 저장한 값으로 Claude 요청을 만들므로, 여기서 가리면 DB와 Claude 모두 원문을 받지 않는다
+        val userText = SensitiveInfoFilter.redact(rawText)
         val existing = conversationId?.let { conversations.findById(it).orElse(null) }
         val conversation = existing ?: conversations.save(Conversation(title = userText.take(50)))
 

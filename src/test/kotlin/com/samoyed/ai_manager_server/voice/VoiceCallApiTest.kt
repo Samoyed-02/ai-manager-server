@@ -43,6 +43,21 @@ class VoiceCallApiTest {
     }
 
     @Test
+    fun `통화 원문의 민감 정보는 가려서 저장한다`() {
+        val body = mvc.post("/voice/calls") {
+            header("Authorization", testAuth.bearer)
+            contentType = MediaType.APPLICATION_JSON
+            content = """
+                {"startedAt":"2026-11-03T12:30:00Z",
+                 "turns":[{"role":"user","text":"와이파이 비번은 qwer1234 이야"}]}
+            """.trimIndent()
+        }.andExpect { status { isCreated() } }.andReturn().response.getContentAsString(Charsets.UTF_8)
+
+        val id = UUID.fromString(Regex(""""conversationId":"([0-9a-f-]{36})"""").find(body)!!.groupValues[1])
+        assertEquals(listOf("와이파이 [가림] 이야"), messages.findByConversationIdOrderByIdAsc(id).map { it.content })
+    }
+
+    @Test
     fun `통화 기록을 VOICE 대화로 저장한다`() {
         val body = mvc.post("/voice/calls") {
             header("Authorization", testAuth.bearer)
