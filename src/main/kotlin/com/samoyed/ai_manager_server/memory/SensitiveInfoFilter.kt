@@ -23,14 +23,17 @@ object SensitiveInfoFilter {
     /** 글자와 숫자가 섞인 32자 이상의 무작위 문자열(토큰, 비밀 키) */
     private val longToken = Regex("""(?<![A-Za-z0-9])(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}""")
 
-    /** "비밀번호: abc123!" 처럼 비밀번호 단어 뒤에 숫자나 기호가 섞인 값이 오는 경우 */
+    /** "비밀번호: abc123!", {"password":"abc123!"} 처럼 비밀번호 단어 뒤에 숫자나 기호가 섞인 값이 오는 경우 */
     private val password = Regex(
-        """(?i)(?:비밀번호|비번|패스워드|암호|password|passwd|pw)\s*(?:[:=]|은|는|이|가)?\s*(?=\S*[0-9!@#$%^&*])[A-Za-z0-9!@#$%^&*()_+\-=.]{4,}"""
+        """(?i)(?:비밀번호|비번|패스워드|암호|password|passwd|pw)["']?\s*(?:[:=]|은|는|이|가)?\s*["']?(?=\S*[0-9!@#$%^&*])[A-Za-z0-9!@#$%^&*()_+\-=.]{4,}"""
     )
+
+    /** 하이픈 없이 쓰거나 띄어 쓴 휴대폰 번호 (01012345678, 010 1234 5678) */
+    private val mobile = Regex("""(?<!\d)01[016789][ -]?\d{3,4}[ -]?\d{4}(?!\d)""")
 
     fun redact(text: String): String {
         var out = text
-        for (rule in listOf(residentNumber, apiKey, longToken, password)) out = rule.replace(out, MASK)
+        for (rule in listOf(residentNumber, apiKey, longToken, password, mobile)) out = rule.replace(out, MASK)
         // 카드를 먼저 본다. 하이픈 카드번호를 계좌 규칙이 앞 12자리만 가리면 끝 4자리가 남는다
         out = cardCandidate.replace(out) { m -> if (luhn(m.value.filter { it.isDigit() })) MASK else m.value }
         out = dashedNumber.replace(out) { m -> if (m.value.count { it.isDigit() } >= 10) MASK else m.value }
